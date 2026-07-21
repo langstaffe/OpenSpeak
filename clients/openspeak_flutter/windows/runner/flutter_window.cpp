@@ -708,6 +708,13 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  if (message == WM_CLOSE &&
+      MessageBoxW(hwnd,
+                  L"\u786E\u5B9A\u8981\u5173\u95ED OpenSpeak \u5417\uFF1F",
+                  L"\u5173\u95ED OpenSpeak",
+                  MB_OKCANCEL | MB_ICONQUESTION | MB_DEFBUTTON2) != IDOK) {
+    return 0;
+  }
   if (message == WM_GETMINMAXINFO) {
     const auto scale = FlutterDesktopGetDpiForHWND(hwnd) / 96.0;
     auto* min_max_info = reinterpret_cast<MINMAXINFO*>(lparam);

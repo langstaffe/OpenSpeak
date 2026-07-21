@@ -14,6 +14,15 @@ class MainFlutterWindow: NSWindow {
   private var pushToTalkModifiers = 0
   private var pushToTalkPressed = false
 
+  override func performClose(_ sender: Any?) {
+    let alert = NSAlert()
+    alert.messageText = "确定要关闭 OpenSpeak 吗？"
+    alert.addButton(withTitle: "关闭")
+    alert.addButton(withTitle: "取消")
+    guard alert.runModal() == .alertFirstButtonReturn else { return }
+    super.performClose(sender)
+  }
+
   override func awakeFromNib() {
     let flutterViewController = FlutterViewController()
     let windowFrame = self.frame
