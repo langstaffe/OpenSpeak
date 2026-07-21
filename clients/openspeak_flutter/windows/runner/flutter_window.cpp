@@ -16,6 +16,7 @@
 #include <flutter/event_channel.h>
 #include <flutter/event_stream_handler_functions.h>
 #include <flutter/standard_method_codec.h>
+#include <flutter_windows.h>
 
 #include <flutter_webrtc.h>
 #include <flutter_webrtc/flutter_web_r_t_c_plugin.h>
@@ -707,6 +708,13 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  if (message == WM_GETMINMAXINFO) {
+    const auto scale = FlutterDesktopGetDpiForHWND(hwnd) / 96.0;
+    auto* min_max_info = reinterpret_cast<MINMAXINFO*>(lparam);
+    min_max_info->ptMinTrackSize = {static_cast<LONG>(650 * scale),
+                                    static_cast<LONG>(450 * scale)};
+    return 0;
+  }
   if (message == kMicrophoneLevelMessage) {
     if (wparam == microphone_level_generation_ && microphone_level_monitor_) {
       SendMicrophoneLevel(microphone_level_monitor_->TakeLatestRms());
