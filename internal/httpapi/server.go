@@ -2088,12 +2088,13 @@ func (s *Server) handleChannelVoiceToken(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	var req struct {
-		CanPublish     *bool  `json:"can_publish"`
-		CanSubscribe   *bool  `json:"can_subscribe"`
-		PersistentRoom bool   `json:"persistent_room"`
-		MediaKeySlots  bool   `json:"media_key_slots"`
-		DeviceID       string `json:"device_id"`
-		E2EEEpochID    string `json:"e2ee_epoch_id"`
+		CanPublish          *bool  `json:"can_publish"`
+		CanSubscribe        *bool  `json:"can_subscribe"`
+		PersistentRoom      bool   `json:"persistent_room"`
+		E2EEParticipantKeys bool   `json:"e2ee_participant_keys"`
+		MediaKeySlots       bool   `json:"media_key_slots"`
+		DeviceID            string `json:"device_id"`
+		E2EEEpochID         string `json:"e2ee_epoch_id"`
 	}
 	if r.Body != nil && r.ContentLength != 0 {
 		if !decodeJSON(w, r, &req) {
@@ -2143,9 +2144,10 @@ func (s *Server) handleChannelVoiceToken(w http.ResponseWriter, r *http.Request,
 			s.disableMediaKeySlots(channel.ServerID, channelID, e2eeEpochID)
 		}
 	}
+	e2eeParticipantKeys := server.EncryptionMode == "e2ee" && req.E2EEParticipantKeys
 	roomScope := "channel"
 	room := liveKitRoomName(channel.ServerID, channel.ID)
-	if req.PersistentRoom && server.EncryptionMode != "e2ee" {
+	if req.PersistentRoom && (server.EncryptionMode != "e2ee" || e2eeParticipantKeys) {
 		roomScope = "server"
 		room = liveKitServerRoomName(channel.ServerID)
 	}
@@ -2214,6 +2216,7 @@ func (s *Server) handleChannelVoiceToken(w http.ResponseWriter, r *http.Request,
 		"e2ee_epoch_id":            e2eeEpochID,
 		"e2ee_key_index":           e2eeKeyIndex,
 		"e2ee_key_active":          e2eeKeyActive,
+		"e2ee_participant_keys":    e2eeParticipantKeys && roomScope == "server",
 		"media_key_slots":          mediaKeySlots,
 		"can_publish":              canSpeak,
 		"can_share_screen":         canShareScreen,

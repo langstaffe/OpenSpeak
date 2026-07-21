@@ -946,6 +946,36 @@ void main() {
       voiceE2EEKeyProviderOptions().discardFrameWhenCryptorNotReady,
       isTrue,
     );
+    final participantToken = VoiceToken.fromJson({
+      'e2ee_required': true,
+      'e2ee_epoch_id': 'epc_current',
+      'room_scope': 'server',
+      'e2ee_participant_keys': true,
+    });
+    expect(voiceE2EEUsesParticipantKeys(participantToken), isTrue);
+    expect(
+      voiceE2EEConfigurationValid(
+        token: participantToken,
+        key: Uint8List(32),
+        deviceId: 'dev_current',
+        epochId: 'epc_current',
+      ),
+      isTrue,
+    );
+    expect(
+      voiceE2EEConfigurationValid(
+        token: VoiceToken.fromJson({
+          'e2ee_required': true,
+          'e2ee_epoch_id': 'epc_current',
+          'room_scope': 'server',
+        }),
+        key: Uint8List(32),
+        deviceId: 'dev_current',
+        epochId: 'epc_current',
+      ),
+      isFalse,
+    );
+    expect(voiceE2EEKeyProviderOptions(sharedKey: false).sharedKey, isFalse);
   });
 
   test('screen-share routing metadata survives API parsing', () {
@@ -1038,6 +1068,46 @@ void main() {
         mediaKeySlots: true,
       ),
       isTrue,
+    );
+
+    final persistentToken = VoiceToken.fromJson({
+      'room': 'openspeak-server-srv_1',
+      'room_scope': 'server',
+      'e2ee_required': true,
+      'e2ee_epoch_id': 'epc_current',
+      'e2ee_participant_keys': true,
+    });
+    final channelToken = VoiceToken.fromJson({
+      'room': 'openspeak-srv_1-chn_1',
+      'room_scope': 'channel',
+      'e2ee_required': true,
+      'e2ee_epoch_id': 'epc_current',
+    });
+    expect(
+      realtimeReconnectRequiresVoiceRestart(
+        e2eeServer: true,
+        currentToken: channelToken,
+        currentMediaEpochId: persistentToken.e2eeEpochId,
+        refreshedToken: persistentToken,
+      ),
+      isTrue,
+    );
+  });
+
+  test('participant key install plan keeps the active slot latest', () {
+    expect(
+      voiceE2EEParticipantKeyInstallPlan(
+        participantIds: const ['usr_remote', '', 'usr_remote'],
+        localUserId: 'usr_local',
+        keyIndex: 1,
+        mirror: true,
+      ),
+      const [
+        (participantId: 'usr_remote', keyIndex: 0),
+        (participantId: 'usr_remote', keyIndex: 1),
+        (participantId: 'usr_local', keyIndex: 0),
+        (participantId: 'usr_local', keyIndex: 1),
+      ],
     );
   });
 

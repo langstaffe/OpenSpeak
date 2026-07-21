@@ -663,10 +663,11 @@ func TestE2EEMediaEnvelopeGatesVoiceTokenByDeviceAndEpoch(t *testing.T) {
 		t.Fatalf("media envelopes = %#v, err = %v", mediaEnvelopes, err)
 	}
 
-	voiceToken := func(epochID string) *httptest.ResponseRecorder {
+	voiceToken := func(epochID string, participantKeys bool) *httptest.ResponseRecorder {
 		body, _ := json.Marshal(map[string]any{
 			"device_id": device.ID, "e2ee_epoch_id": epochID,
 			"persistent_room": true, "media_key_slots": true,
+			"e2ee_participant_keys": participantKeys,
 		})
 		request := httptest.NewRequest(http.MethodPost, "/api/v1/channels/"+env.channel.ID+"/voice-token", bytes.NewReader(body))
 		request.Header.Set("Authorization", "Bearer "+env.token)
@@ -674,17 +675,25 @@ func TestE2EEMediaEnvelopeGatesVoiceTokenByDeviceAndEpoch(t *testing.T) {
 		env.server.ServeHTTP(response, request)
 		return response
 	}
-	response := voiceToken(env.epoch.ID)
+	response := voiceToken(env.epoch.ID, true)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"e2ee_required":true`) || !strings.Contains(response.Body.String(), `"e2ee_epoch_id":"`+env.epoch.ID+`"`) {
 		t.Fatalf("voice token = %d, body = %s", response.Code, response.Body.String())
 	}
-	if !strings.Contains(response.Body.String(), `"room_scope":"channel"`) {
-		t.Fatalf("e2ee persistent room must stay channel-scoped: %s", response.Body.String())
+	if !strings.Contains(response.Body.String(), `"room_scope":"server"`) ||
+		!strings.Contains(response.Body.String(), `"room":"`+liveKitServerRoomName(env.os.ID)+`"`) ||
+		!strings.Contains(response.Body.String(), `"e2ee_participant_keys":true`) {
+		t.Fatalf("participant-key e2ee persistent room = %s", response.Body.String())
 	}
 	if !strings.Contains(response.Body.String(), `"e2ee_key_index":0`) ||
 		!strings.Contains(response.Body.String(), `"e2ee_key_active":true`) ||
 		!strings.Contains(response.Body.String(), `"media_key_slots":false`) {
 		t.Fatalf("default media key slot state = %s", response.Body.String())
+	}
+	legacy := voiceToken(env.epoch.ID, false)
+	if legacy.Code != http.StatusOK ||
+		!strings.Contains(legacy.Body.String(), `"room_scope":"channel"`) ||
+		!strings.Contains(legacy.Body.String(), `"e2ee_participant_keys":false`) {
+		t.Fatalf("legacy e2ee room = %d, body = %s", legacy.Code, legacy.Body.String())
 	}
 	env.hub.SetCurrentChannel(env.os.ID, env.user.ID, env.channel.ID)
 	screenBody, _ := json.Marshal(map[string]any{
@@ -700,13 +709,13 @@ func TestE2EEMediaEnvelopeGatesVoiceTokenByDeviceAndEpoch(t *testing.T) {
 		!strings.Contains(screenResponse.Body.String(), `"e2ee_epoch_id":"`+env.epoch.ID+`"`) {
 		t.Fatalf("screen token = %d, body = %s", screenResponse.Code, screenResponse.Body.String())
 	}
-	if missing := voiceToken(""); missing.Code != http.StatusBadRequest {
+	if missing := voiceToken("", true); missing.Code != http.StatusBadRequest {
 		t.Fatalf("missing epoch = %d, body = %s", missing.Code, missing.Body.String())
 	}
 	if _, err := env.repo.CreateEpoch(context.Background(), env.channel.ID, "rotated"); err != nil {
 		t.Fatal(err)
 	}
-	if stale := voiceToken(env.epoch.ID); stale.Code != http.StatusConflict || !strings.Contains(stale.Body.String(), "epoch_changed") {
+	if stale := voiceToken(env.epoch.ID, true); stale.Code != http.StatusConflict || !strings.Contains(stale.Body.String(), "epoch_changed") {
 		t.Fatalf("stale epoch = %d, body = %s", stale.Code, stale.Body.String())
 	}
 }

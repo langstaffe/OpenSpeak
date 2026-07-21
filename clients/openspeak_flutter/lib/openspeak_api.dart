@@ -1012,9 +1012,11 @@ class OpenSpeakApi {
     String deviceId = '',
     String e2eeEpochId = '',
     bool persistentRoom = true,
+    bool e2eeParticipantKeys = true,
   }) async {
     final body = {
       if (persistentRoom) 'persistent_room': true,
+      if (persistentRoom && e2eeParticipantKeys) 'e2ee_participant_keys': true,
       'media_key_slots': true,
       if (deviceId.isNotEmpty) 'device_id': deviceId,
       if (e2eeEpochId.isNotEmpty) 'e2ee_epoch_id': e2eeEpochId,
@@ -1034,6 +1036,9 @@ class OpenSpeakApi {
           final message
               when message.contains('unknown field "persistent_room"') =>
             'persistent_room',
+          final message
+              when message.contains('unknown field "e2ee_participant_keys"') =>
+            'e2ee_participant_keys',
           final message
               when message.contains('unknown field "media_key_slots"') =>
             'media_key_slots',
@@ -3187,6 +3192,7 @@ class VoiceToken {
     required this.e2eeEpochId,
     required this.e2eeKeyIndex,
     required this.e2eeKeyActive,
+    required this.e2eeParticipantKeys,
     required this.mediaKeySlots,
     required this.canPublish,
     required this.canShareScreen,
@@ -3205,6 +3211,7 @@ class VoiceToken {
   final String e2eeEpochId;
   final int e2eeKeyIndex;
   final bool e2eeKeyActive;
+  final bool e2eeParticipantKeys;
   final bool mediaKeySlots;
   final bool canPublish;
   final bool canShareScreen;
@@ -3214,6 +3221,7 @@ class VoiceToken {
     String? e2eeEpochId,
     int? e2eeKeyIndex,
     bool? e2eeKeyActive,
+    bool? e2eeParticipantKeys,
     bool? mediaKeySlots,
   }) => VoiceToken(
     url: url,
@@ -3230,6 +3238,7 @@ class VoiceToken {
     e2eeEpochId: e2eeEpochId ?? this.e2eeEpochId,
     e2eeKeyIndex: e2eeKeyIndex ?? this.e2eeKeyIndex,
     e2eeKeyActive: e2eeKeyActive ?? this.e2eeKeyActive,
+    e2eeParticipantKeys: e2eeParticipantKeys ?? this.e2eeParticipantKeys,
     mediaKeySlots: mediaKeySlots ?? this.mediaKeySlots,
     canPublish: canPublish,
     canShareScreen: canShareScreen,
@@ -3251,6 +3260,7 @@ class VoiceToken {
       e2eeEpochId: json['e2ee_epoch_id'] as String? ?? '',
       e2eeKeyIndex: json['e2ee_key_index'] as int? ?? 0,
       e2eeKeyActive: json['e2ee_key_active'] as bool? ?? true,
+      e2eeParticipantKeys: json['e2ee_participant_keys'] as bool? ?? false,
       mediaKeySlots: json['media_key_slots'] as bool? ?? false,
       canPublish: json['can_publish'] as bool? ?? true,
       canShareScreen: json['can_share_screen'] as bool? ?? false,

@@ -2979,8 +2979,9 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
           currentMediaEpochId: refreshedToken.e2eeEpochId,
           currentMediaKeyIndex: refreshedToken.e2eeKeyIndex,
           mediaKeySlots: refreshedToken.mediaKeySlots,
+          refreshedToken: refreshedToken,
         )) {
-          await joinLiveKitVoice(channel: channel);
+          await joinLiveKitVoice(channel: channel, forceReconnect: true);
           return;
         }
         await voiceSession.setExternalVoiceToken(refreshedToken);
@@ -5606,10 +5607,26 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         );
   }
 
-  Future<({Uint8List? key, String deviceId, String epochId})>
+  Future<
+    ({
+      Uint8List? key,
+      String deviceId,
+      String epochId,
+      int keyIndex,
+      bool keyActive,
+      bool mediaKeySlots,
+    })
+  >
   prepareVoiceEncryption(Channel channel) async {
     if (selectedServer?.encryptionMode != 'e2ee') {
-      return (key: null, deviceId: '', epochId: '');
+      return (
+        key: null,
+        deviceId: '',
+        epochId: '',
+        keyIndex: 0,
+        keyActive: true,
+        mediaKeySlots: false,
+      );
     }
     final client = api;
     final auth = session;
@@ -5631,10 +5648,17 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       key: Uint8List.fromList(await key.extractBytes()),
       deviceId: identity.deviceId,
       epochId: state.epoch.id,
+      keyIndex: state.mediaKeyIndex,
+      keyActive: state.mediaKeyActive,
+      mediaKeySlots: state.mediaKeySlots,
     );
   }
 
-  Future<void> joinLiveKitVoice({int? generation, Channel? channel}) async {
+  Future<void> joinLiveKitVoice({
+    int? generation,
+    Channel? channel,
+    bool forceReconnect = false,
+  }) async {
     final client = api;
     final auth = session;
     final server = selectedServer;
@@ -5671,33 +5695,32 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
           authToken: auth.token,
           serverId: server.id,
           channelId: targetChannel.id,
+          localUserId: auth.user.id,
           channelMemberUserIds: channelMemberUserIds,
           requestGeneration: voiceJoinRequest,
           e2eeKey: encryption.key,
           e2eeDeviceId: encryption.deviceId,
           e2eeEpochId: encryption.epochId,
         );
-        final voiceToken = voiceSession.snapshot.voiceToken;
-        if (voiceToken?.e2eeRequired == true &&
-            voiceToken?.mediaKeySlots == true &&
-            voiceToken?.e2eeKeyActive == false) {
-          unawaited(
-            completeVoiceMediaKeyTransition(
-              targetChannel,
-              epochId: voiceToken!.e2eeEpochId,
-              keyIndex: voiceToken.e2eeKeyIndex,
-            ),
-          );
-        }
       }
 
       if (!isActiveConnectionGeneration(activeGeneration)) return;
-      if (voiceSession.canSwitchPersistentChannel) {
+      if (!forceReconnect && voiceSession.canSwitchPersistentChannel) {
+        final encryption = await prepareVoiceEncryption(targetChannel);
+        if (!isActiveConnectionGeneration(activeGeneration) ||
+            !voiceSession.isJoinRequestCurrent(voiceJoinRequest)) {
+          return;
+        }
         await switchVoiceChannelWithReconnectFallback(
           switchWithoutReconnect: () => voiceSession.switchPersistentChannel(
             channelId: targetChannel.id,
             channelMemberUserIds: channelMemberUserIds,
             requestGeneration: voiceJoinRequest,
+            e2eeKey: encryption.key,
+            e2eeEpochId: encryption.epochId,
+            e2eeKeyIndex: encryption.keyIndex,
+            e2eeKeyActive: encryption.keyActive,
+            mediaKeySlots: encryption.mediaKeySlots,
           ),
           reconnect: (error, stackTrace) async {
             if (!isActiveConnectionGeneration(activeGeneration) ||
@@ -5712,6 +5735,18 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         await connect();
       }
       if (!voiceSession.isJoinRequestCurrent(voiceJoinRequest)) return;
+      final voiceToken = voiceSession.snapshot.voiceToken;
+      if (voiceToken?.e2eeRequired == true &&
+          voiceToken?.mediaKeySlots == true &&
+          voiceToken?.e2eeKeyActive == false) {
+        unawaited(
+          completeVoiceMediaKeyTransition(
+            targetChannel,
+            epochId: voiceToken!.e2eeEpochId,
+            keyIndex: voiceToken.e2eeKeyIndex,
+          ),
+        );
+      }
       await audioDeviceMonitor.refresh();
       if (!isActiveConnectionGeneration(activeGeneration) ||
           !voiceSession.isJoinRequestCurrent(voiceJoinRequest)) {

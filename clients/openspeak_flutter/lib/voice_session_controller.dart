@@ -401,9 +401,25 @@ bool voiceE2EEConfigurationValid({
   return key?.length == 32 &&
       deviceId.isNotEmpty &&
       epochId.isNotEmpty &&
+      (token.roomScope != 'server' || token.e2eeParticipantKeys) &&
       (token.e2eeKeyIndex == 0 || token.e2eeKeyIndex == 1) &&
       token.e2eeEpochId == epochId;
 }
+
+bool voiceE2EEUsesParticipantKeys(VoiceToken token) =>
+    token.e2eeRequired &&
+    token.roomScope == 'server' &&
+    token.e2eeParticipantKeys;
+
+bool voiceTokenRequiresRoomReconnect(
+  VoiceToken? currentToken,
+  VoiceToken refreshedToken,
+) =>
+    currentToken == null ||
+    currentToken.room != refreshedToken.room ||
+    currentToken.roomScope != refreshedToken.roomScope ||
+    currentToken.e2eeRequired != refreshedToken.e2eeRequired ||
+    currentToken.e2eeParticipantKeys != refreshedToken.e2eeParticipantKeys;
 
 bool realtimeReconnectRequiresVoiceRestart({
   required bool e2eeServer,
@@ -411,22 +427,46 @@ bool realtimeReconnectRequiresVoiceRestart({
   required String currentMediaEpochId,
   int currentMediaKeyIndex = 0,
   bool mediaKeySlots = false,
+  VoiceToken? refreshedToken,
 }) =>
     e2eeServer &&
     (currentToken == null ||
+        (refreshedToken != null &&
+            voiceTokenRequiresRoomReconnect(currentToken, refreshedToken)) ||
         currentToken.e2eeEpochId != currentMediaEpochId ||
         currentToken.e2eeKeyIndex != currentMediaKeyIndex ||
         currentToken.mediaKeySlots != mediaKeySlots);
 
-rtc.KeyProviderOptions voiceE2EEKeyProviderOptions() => rtc.KeyProviderOptions(
-  sharedKey: true,
-  ratchetSalt: Uint8List.fromList(lk.defaultRatchetSalt.codeUnits),
-  ratchetWindowSize: lk.defaultRatchetWindowSize,
-  uncryptedMagicBytes: Uint8List.fromList(lk.defaultMagicBytes.codeUnits),
-  failureTolerance: lk.defaultFailureTolerance,
-  keyRingSize: lk.defaultKeyRingSize,
-  discardFrameWhenCryptorNotReady: true,
-);
+List<({String participantId, int keyIndex})>
+voiceE2EEParticipantKeyInstallPlan({
+  required Iterable<String> participantIds,
+  required String localUserId,
+  required int keyIndex,
+  required bool mirror,
+}) {
+  final identities = <String>{
+    for (final participantId in participantIds)
+      if (participantId.isNotEmpty) participantId,
+    if (localUserId.isNotEmpty) localUserId,
+  };
+  return [
+    for (final participantId in identities) ...[
+      if (mirror) (participantId: participantId, keyIndex: 1 - keyIndex),
+      (participantId: participantId, keyIndex: keyIndex),
+    ],
+  ];
+}
+
+rtc.KeyProviderOptions voiceE2EEKeyProviderOptions({bool sharedKey = true}) =>
+    rtc.KeyProviderOptions(
+      sharedKey: sharedKey,
+      ratchetSalt: Uint8List.fromList(lk.defaultRatchetSalt.codeUnits),
+      ratchetWindowSize: lk.defaultRatchetWindowSize,
+      uncryptedMagicBytes: Uint8List.fromList(lk.defaultMagicBytes.codeUnits),
+      failureTolerance: lk.defaultFailureTolerance,
+      keyRingSize: lk.defaultKeyRingSize,
+      discardFrameWhenCryptorNotReady: true,
+    );
 
 String voiceJoinFailureStatus({
   required bool liveKitConnected,
@@ -699,12 +739,15 @@ class VoiceSessionController extends ChangeNotifier {
   OpenSpeakApi? _api;
   String? _authToken;
   String? _serverId;
+  String _localUserId = '';
   String? _channelId;
   Set<String> _channelMemberUserIds = const {};
   Set<String> _authorizedScreenSharingUserIds = const {};
   ScreenShareQuality? _screenShareQuality;
   bool _persistentChannelSwitchIsolated = false;
   Uint8List? _e2eeKey;
+  Uint8List? _retiringE2EEKey;
+  bool _e2eeParticipantKeys = false;
   String _e2eeDeviceId = '';
   String _e2eeEpochId = '';
   int _activeE2EEKeyIndex = 0;
@@ -1399,6 +1442,7 @@ class VoiceSessionController extends ChangeNotifier {
     required String authToken,
     required String serverId,
     required String channelId,
+    String localUserId = '',
     Set<String> channelMemberUserIds = const {},
     int? requestGeneration,
     Uint8List? e2eeKey,
@@ -1423,6 +1467,11 @@ class VoiceSessionController extends ChangeNotifier {
         : reconnectAttempt
         ? _e2eeEpochId
         : '';
+    final nextLocalUserId = localUserId.isNotEmpty
+        ? localUserId
+        : reconnectAttempt
+        ? _localUserId
+        : '';
     final generation = requestGeneration ?? _sessionGeneration + 1;
     var liveKitConnected = false;
     var syncingVoiceState = false;
@@ -1442,6 +1491,7 @@ class VoiceSessionController extends ChangeNotifier {
     _api = api;
     _authToken = authToken;
     _serverId = serverId;
+    _localUserId = nextLocalUserId;
     _channelId = channelId;
     _channelMemberUserIds = Set<String>.from(channelMemberUserIds);
     _persistentChannelSwitchIsolated = false;
@@ -1490,6 +1540,7 @@ class VoiceSessionController extends ChangeNotifier {
       _activeE2EEKeyIndex = token.e2eeKeyIndex;
       _stagedE2EEKeyIndex = token.e2eeKeyActive ? null : token.e2eeKeyIndex;
       _e2eeMediaActive = !token.e2eeRequired || token.e2eeKeyActive;
+      _e2eeParticipantKeys = voiceE2EEUsesParticipantKeys(token);
       _setSnapshot(
         snapshot.copyWith(
           voiceToken: token,
@@ -1499,16 +1550,28 @@ class VoiceSessionController extends ChangeNotifier {
 
       lk.E2EEOptions? encryption;
       if (token.e2eeRequired) {
-        final options = voiceE2EEKeyProviderOptions();
+        final options = voiceE2EEKeyProviderOptions(
+          sharedKey: !_e2eeParticipantKeys,
+        );
         final keyProvider = lk.BaseKeyProvider(
           await rtc.frameCryptorFactory.createDefaultKeyProvider(options),
           options,
         );
-        await keyProvider.setRawKey(_e2eeKey!, keyIndex: token.e2eeKeyIndex);
-        await keyProvider.setRawKey(
-          _e2eeKey!,
-          keyIndex: 1 - token.e2eeKeyIndex,
-        );
+        if (_e2eeParticipantKeys) {
+          await _installParticipantKeys(
+            keyProvider,
+            _e2eeKey!,
+            _channelMemberUserIds,
+            token.e2eeKeyIndex,
+            mirror: true,
+          );
+        } else {
+          await keyProvider.setRawKey(_e2eeKey!, keyIndex: token.e2eeKeyIndex);
+          await keyProvider.setRawKey(
+            _e2eeKey!,
+            keyIndex: 1 - token.e2eeKeyIndex,
+          );
+        }
         encryption = lk.E2EEOptions(keyProvider: keyProvider);
       }
       final room = lk.Room(
@@ -1937,7 +2000,49 @@ class VoiceSessionController extends ChangeNotifier {
   }
 
   Future<void> setExternalVoiceToken(VoiceToken token) async {
+    if (_room != null &&
+        voiceTokenRequiresRoomReconnect(snapshot.voiceToken, token)) {
+      throw OpenSpeakException('语音房间拓扑已变化，需要重新连接');
+    }
+    _e2eeParticipantKeys = voiceE2EEUsesParticipantKeys(token);
     _setSnapshot(snapshot.copyWith(voiceToken: token));
+  }
+
+  Set<String> _e2eeParticipantIds(Iterable<String> userIds) => {
+    for (final userId in userIds)
+      if (userId.isNotEmpty) userId,
+    if (_localUserId.isNotEmpty) _localUserId,
+  };
+
+  Future<void> _installParticipantKeys(
+    lk.BaseKeyProvider keyProvider,
+    Uint8List key,
+    Iterable<String> userIds,
+    int keyIndex, {
+    required bool mirror,
+  }) async {
+    for (final install in voiceE2EEParticipantKeyInstallPlan(
+      participantIds: userIds,
+      localUserId: _localUserId,
+      keyIndex: keyIndex,
+      mirror: mirror,
+    )) {
+      await keyProvider.setRawKey(
+        key,
+        participantId: install.participantId,
+        keyIndex: install.keyIndex,
+      );
+    }
+  }
+
+  Future<void> _setParticipantKeyIndex(
+    lk.E2EEManager manager,
+    Iterable<String> userIds,
+    int keyIndex,
+  ) async {
+    for (final userId in _e2eeParticipantIds(userIds)) {
+      await manager.setKeyIndex(keyIndex, participantIdentity: userId);
+    }
   }
 
   Future<void> stageE2EEMediaKey({
@@ -1953,10 +2058,41 @@ class VoiceSessionController extends ChangeNotifier {
     if (keyIndex != 0 && keyIndex != 1) {
       throw OpenSpeakException('媒体密钥槽位无效');
     }
+    if (_e2eeEpochId == epochId && _stagedE2EEKeyIndex == keyIndex) return;
     _e2eeOldKeyRetireTimer?.cancel();
     _e2eeOldKeyRetireTimer = null;
+    _retiringE2EEKey?.fillRange(0, _retiringE2EEKey!.length, 0);
+    _retiringE2EEKey = null;
     final nextKey = Uint8List.fromList(key);
-    await manager.keyProvider.setRawKey(nextKey, keyIndex: keyIndex);
+    if (_e2eeParticipantKeys) {
+      final currentKey = _e2eeKey;
+      if (_e2eeMediaActive &&
+          currentKey != null &&
+          keyIndex == _activeE2EEKeyIndex) {
+        throw OpenSpeakException('新的媒体密钥必须安装到备用槽位');
+      }
+      await _installParticipantKeys(
+        manager.keyProvider,
+        nextKey,
+        _channelMemberUserIds,
+        keyIndex,
+        mirror: false,
+      );
+      if (_e2eeMediaActive && currentKey != null) {
+        _retiringE2EEKey = Uint8List.fromList(currentKey);
+        // Keep the active slot as LiveKit's latest participant slot until the
+        // staged epoch is activated, including for tracks subscribed meanwhile.
+        await _installParticipantKeys(
+          manager.keyProvider,
+          _retiringE2EEKey!,
+          _channelMemberUserIds,
+          _activeE2EEKeyIndex,
+          mirror: false,
+        );
+      }
+    } else {
+      await manager.keyProvider.setRawKey(nextKey, keyIndex: keyIndex);
+    }
     await _screenRoom?.e2eeManager?.keyProvider.setRawKey(
       nextKey,
       keyIndex: keyIndex,
@@ -1997,7 +2133,22 @@ class VoiceSessionController extends ChangeNotifier {
     if (_stagedE2EEKeyIndex != null && _stagedE2EEKeyIndex != keyIndex) {
       return;
     }
-    await manager.setKeyIndex(keyIndex);
+    if (_e2eeParticipantKeys) {
+      final key = _e2eeKey;
+      if (key == null) return;
+      // Staging keeps the old slot latest so newly subscribed tracks continue
+      // to decrypt. Mark the activated slot latest before opening media again.
+      await _installParticipantKeys(
+        manager.keyProvider,
+        key,
+        _channelMemberUserIds,
+        keyIndex,
+        mirror: false,
+      );
+      await _setParticipantKeyIndex(manager, _channelMemberUserIds, keyIndex);
+    } else {
+      await manager.setKeyIndex(keyIndex);
+    }
     await _screenRoom?.e2eeManager?.setKeyIndex(keyIndex);
     _activeE2EEKeyIndex = keyIndex;
     _stagedE2EEKeyIndex = null;
@@ -2044,10 +2195,72 @@ class VoiceSessionController extends ChangeNotifier {
     await _applyMediaRouting();
   }
 
+  Future<void> _configurePersistentChannelE2EE({
+    required Uint8List? key,
+    required String epochId,
+    required int keyIndex,
+    required bool keyActive,
+    required bool mediaKeySlots,
+    required Set<String> channelMemberUserIds,
+  }) async {
+    final token = snapshot.voiceToken;
+    if (token?.e2eeRequired != true) return;
+    final manager = _room?.e2eeManager;
+    if (!_e2eeParticipantKeys ||
+        manager == null ||
+        key == null ||
+        key.length != 32 ||
+        epochId.isEmpty) {
+      throw OpenSpeakException('当前持久语音会话无法安装频道媒体密钥');
+    }
+    if (keyIndex != 0 && keyIndex != 1) {
+      throw OpenSpeakException('媒体密钥槽位无效');
+    }
+
+    _e2eeOldKeyRetireTimer?.cancel();
+    _e2eeOldKeyRetireTimer = null;
+    _retiringE2EEKey?.fillRange(0, _retiringE2EEKey!.length, 0);
+    _retiringE2EEKey = null;
+    final nextKey = Uint8List.fromList(key);
+    await _installParticipantKeys(
+      manager.keyProvider,
+      nextKey,
+      channelMemberUserIds,
+      keyIndex,
+      mirror: keyActive,
+    );
+    if (keyActive) {
+      await _setParticipantKeyIndex(manager, channelMemberUserIds, keyIndex);
+      _activeE2EEKeyIndex = keyIndex;
+      _stagedE2EEKeyIndex = null;
+    } else {
+      _stagedE2EEKeyIndex = keyIndex;
+    }
+    _e2eeMediaActive = keyActive;
+    _e2eeKey?.fillRange(0, _e2eeKey!.length, 0);
+    _e2eeKey = nextKey;
+    _e2eeEpochId = epochId;
+    _setSnapshot(
+      snapshot.copyWith(
+        voiceToken: token!.copyWith(
+          e2eeEpochId: epochId,
+          e2eeKeyIndex: keyIndex,
+          e2eeKeyActive: keyActive,
+          mediaKeySlots: mediaKeySlots,
+        ),
+      ),
+    );
+  }
+
   Future<void> switchPersistentChannel({
     required String channelId,
     required Set<String> channelMemberUserIds,
     required int requestGeneration,
+    Uint8List? e2eeKey,
+    String e2eeEpochId = '',
+    int e2eeKeyIndex = 0,
+    bool e2eeKeyActive = true,
+    bool mediaKeySlots = false,
   }) async {
     final room = _room;
     final api = _api;
@@ -2063,13 +2276,43 @@ class VoiceSessionController extends ChangeNotifier {
     if (!_isActiveSessionGeneration(requestGeneration)) return;
     if (_channelId == channelId) {
       _persistentChannelSwitchIsolated = false;
+      if (snapshot.voiceToken?.e2eeRequired == true && !e2eeKeyActive) {
+        if (e2eeKey == null) {
+          throw OpenSpeakException('当前持久语音会话无法安装频道媒体密钥');
+        }
+        await stageE2EEMediaKey(
+          key: e2eeKey,
+          epochId: e2eeEpochId,
+          keyIndex: e2eeKeyIndex,
+        );
+      } else {
+        await _configurePersistentChannelE2EE(
+          key: e2eeKey,
+          epochId: e2eeEpochId,
+          keyIndex: e2eeKeyIndex,
+          keyActive: e2eeKeyActive,
+          mediaKeySlots: mediaKeySlots,
+          channelMemberUserIds: channelMemberUserIds,
+        );
+      }
+      if (!_isActiveSessionGeneration(requestGeneration)) return;
       await updateChannelMembers(channelMemberUserIds);
+      await _applyMediaRouting();
       return;
     }
     await isolatePersistentRoomForChannelSwitch();
     if (!_isActiveSessionGeneration(requestGeneration)) return;
 
     final localUserId = room.localParticipant?.identity;
+    await _configurePersistentChannelE2EE(
+      key: e2eeKey,
+      epochId: e2eeEpochId,
+      keyIndex: e2eeKeyIndex,
+      keyActive: e2eeKeyActive,
+      mediaKeySlots: mediaKeySlots,
+      channelMemberUserIds: channelMemberUserIds,
+    );
+    if (!_isActiveSessionGeneration(requestGeneration)) return;
     final state = await _setVoiceStateWhenRealtimeReady(
       api,
       authToken,
@@ -2088,7 +2331,13 @@ class VoiceSessionController extends ChangeNotifier {
     _persistentChannelSwitchIsolated = false;
     _setSnapshot(
       snapshot.copyWith(
-        voiceToken: snapshot.voiceToken?.copyWith(channelId: channelId),
+        voiceToken: snapshot.voiceToken?.copyWith(
+          channelId: channelId,
+          e2eeEpochId: e2eeEpochId.isEmpty ? null : e2eeEpochId,
+          e2eeKeyIndex: e2eeEpochId.isEmpty ? null : e2eeKeyIndex,
+          e2eeKeyActive: e2eeEpochId.isEmpty ? null : e2eeKeyActive,
+          mediaKeySlots: e2eeEpochId.isEmpty ? null : mediaKeySlots,
+        ),
         voiceState: state,
         speaking: false,
         status: '已连接 ${snapshot.voiceToken?.room ?? ''}'.trim(),
@@ -2108,6 +2357,32 @@ class VoiceSessionController extends ChangeNotifier {
     final localUserId = _room?.localParticipant?.identity;
     if (localUserId != null && localUserId.isNotEmpty) next.add(localUserId);
     if (setEquals(_channelMemberUserIds, next)) return;
+    if (_e2eeParticipantKeys) {
+      final manager = _room?.e2eeManager;
+      final key = _e2eeKey;
+      if (manager != null && key != null) {
+        final added = next.difference(_channelMemberUserIds);
+        final stagedIndex = _stagedE2EEKeyIndex;
+        await _installParticipantKeys(
+          manager.keyProvider,
+          key,
+          added,
+          stagedIndex ?? _activeE2EEKeyIndex,
+          mirror: stagedIndex == null,
+        );
+        if (stagedIndex == null) {
+          await _setParticipantKeyIndex(manager, added, _activeE2EEKeyIndex);
+        } else if (_retiringE2EEKey != null) {
+          await _installParticipantKeys(
+            manager.keyProvider,
+            _retiringE2EEKey!,
+            added,
+            _activeE2EEKeyIndex,
+            mirror: false,
+          );
+        }
+      }
+    }
     _channelMemberUserIds = next;
     await _applyMediaRouting();
   }
@@ -2255,7 +2530,17 @@ class VoiceSessionController extends ChangeNotifier {
       final key = _e2eeKey;
       if (manager == null || key == null) return;
       try {
-        await manager.keyProvider.setRawKey(key, keyIndex: 1 - activeIndex);
+        if (_e2eeParticipantKeys) {
+          await _installParticipantKeys(
+            manager.keyProvider,
+            key,
+            _channelMemberUserIds,
+            activeIndex,
+            mirror: true,
+          );
+        } else {
+          await manager.keyProvider.setRawKey(key, keyIndex: 1 - activeIndex);
+        }
         await _screenRoom?.e2eeManager?.keyProvider.setRawKey(
           key,
           keyIndex: 1 - activeIndex,
@@ -2263,6 +2548,9 @@ class VoiceSessionController extends ChangeNotifier {
         ClientLog.write('voice.e2ee', 'old media key retired epoch=$epochId');
       } catch (error, stackTrace) {
         ClientLog.error('voice.e2ee.retire', error, stackTrace);
+      } finally {
+        _retiringE2EEKey?.fillRange(0, _retiringE2EEKey!.length, 0);
+        _retiringE2EEKey = null;
       }
     });
   }
@@ -3662,6 +3950,9 @@ class VoiceSessionController extends ChangeNotifier {
     _e2eeOldKeyRetireTimer = null;
     _e2eeKey?.fillRange(0, _e2eeKey!.length, 0);
     _e2eeKey = null;
+    _retiringE2EEKey?.fillRange(0, _retiringE2EEKey!.length, 0);
+    _retiringE2EEKey = null;
+    _e2eeParticipantKeys = false;
     _e2eeDeviceId = '';
     _e2eeEpochId = '';
     _activeE2EEKeyIndex = 0;
