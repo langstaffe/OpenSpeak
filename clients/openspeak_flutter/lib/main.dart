@@ -37,6 +37,7 @@ import 'device_identity_service.dart';
 import 'microphone_activation.dart';
 import 'openspeak_api.dart';
 import 'owner_identity_service.dart';
+import 'sound_effects.dart';
 import 'voice_session_controller.dart';
 
 Future<void> main() async {
@@ -74,6 +75,7 @@ const audioInputDeviceKey = 'openspeak.audioInputDeviceId.v1';
 const audioOutputDeviceKey = 'openspeak.audioOutputDeviceId.v1';
 const audioInputVolumeKey = 'openspeak.audioInputVolume.v1';
 const audioOutputVolumeKey = 'openspeak.audioOutputVolume.v1';
+const soundEffectVolumeKey = 'openspeak.soundEffectVolume.v1';
 const microphoneActivationModeKey = 'openspeak.microphoneActivationMode.v1';
 const microphoneThresholdKey = 'openspeak.microphoneThreshold.v1';
 const microphonePushToTalkHotkeyKey = 'openspeak.microphonePushToTalkHotkey.v1';
@@ -1219,6 +1221,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   final messageScrollController = ScrollController();
   final attachmentCache = AttachmentCacheService();
   final audioPlayer = AudioPlayer();
+  final soundEffects = SoundEffectPlayer();
   final audioStreamProxy = AudioStreamProxy();
   final ownerIdentity = OwnerIdentityService();
   final deviceIdentity = DeviceIdentityService();
@@ -1280,13 +1283,14 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   bool uploadQueueRunning = false;
   List<SavedServerConnection> savedConnections = [];
   SavedServerConnection? selectedConnection;
-  String localDisplayName = 'Admin';
+  String localDisplayName = 'user';
   File? localAvatarFile;
   int localAvatarRevision = 0;
   String? selectedAudioInputDeviceId;
   String? selectedAudioOutputDeviceId;
   double audioInputVolume = 1.0;
   double audioOutputVolume = 1.0;
+  double soundEffectVolume = 1.0;
   bool noiseSuppressionEnabled = true;
   MicrophoneActivationMode microphoneActivationMode =
       MicrophoneActivationMode.continuous;
@@ -1307,16 +1311,25 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   StreamSubscription<void>? audioCompleteSub;
   Future<void> unreadPersist = Future.value();
   late final AudioDeviceMonitor audioDeviceMonitor;
+  late final MutedSpeechReminder mutedSpeechReminder;
+  VoiceSessionSnapshot previousVoiceSoundSnapshot =
+      VoiceSessionSnapshot.initial();
+  Timer? voiceDisconnectSoundTimer;
+  bool voiceReconnectPending = false;
+  bool voiceDisconnectSoundPlayed = false;
+  bool audioDeviceErrorActive = false;
 
   @override
   void initState() {
     super.initState();
+    mutedSpeechReminder = MutedSpeechReminder(onMutedSpeechWarning);
     audioDeviceMonitor = AudioDeviceMonitor(
       enumerateDevices: rtc.navigator.mediaDevices.enumerateDevices,
       registerDeviceChangeListener: registerAudioDeviceChangeListener,
       pollInterval: audioDevicePollInterval(defaultTargetPlatform),
     )..addListener(onAudioDevicesChanged);
     voiceSession = VoiceSessionController()..addListener(onVoiceSessionChanged);
+    voiceSession.microphoneInputActive.addListener(onMicrophoneActivityChanged);
     pushToTalkHotkey.addListener(onPushToTalkHotkeyChanged);
     messageScrollController.addListener(onMessageScroll);
     audioPositionSub = audioPlayer.onPositionChanged.listen((position) {
@@ -1355,9 +1368,14 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   void dispose() {
     socket?.close();
     realtimeStateRefreshTimer?.cancel();
+    voiceDisconnectSoundTimer?.cancel();
+    mutedSpeechReminder.dispose();
     audioDeviceMonitor.removeListener(onAudioDevicesChanged);
     audioDeviceMonitor.dispose();
     voiceSession.removeListener(onVoiceSessionChanged);
+    voiceSession.microphoneInputActive.removeListener(
+      onMicrophoneActivityChanged,
+    );
     voiceSession.dispose();
     pushToTalkHotkey.removeListener(onPushToTalkHotkeyChanged);
     pushToTalkHotkey.dispose();
@@ -1366,6 +1384,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     unawaited(audioStateSub?.cancel());
     unawaited(audioCompleteSub?.cancel());
     unawaited(audioPlayer.dispose());
+    unawaited(soundEffects.dispose());
     unawaited(audioStreamProxy.dispose());
     serverUrlController.dispose();
     passwordController.dispose();
@@ -1379,6 +1398,45 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
 
   void onVoiceSessionChanged() {
     if (!mounted) return;
+    final previous = previousVoiceSoundSnapshot;
+    final current = voiceSession.snapshot;
+    previousVoiceSoundSnapshot = current;
+    if (previous.listenOff != current.listenOff) {
+      unawaited(
+        soundEffects.play(
+          current.listenOff ? SoundEffect.listenOff : SoundEffect.listenOn,
+        ),
+      );
+    } else if (previous.muted != current.muted) {
+      unawaited(
+        soundEffects.play(
+          current.muted ? SoundEffect.micMute : SoundEffect.micUnmute,
+        ),
+      );
+    }
+    if (!previous.reconnecting &&
+        current.reconnecting &&
+        !voiceReconnectPending) {
+      voiceReconnectPending = true;
+      voiceDisconnectSoundTimer?.cancel();
+      voiceDisconnectSoundTimer = Timer(const Duration(seconds: 2), () {
+        if (!mounted ||
+            !voiceReconnectPending ||
+            voiceSession.snapshot.connected) {
+          return;
+        }
+        voiceDisconnectSoundPlayed = true;
+        unawaited(soundEffects.play(SoundEffect.voiceDisconnect));
+      });
+    } else if (current.connected && voiceReconnectPending) {
+      voiceDisconnectSoundTimer?.cancel();
+      if (voiceDisconnectSoundPlayed) {
+        unawaited(soundEffects.play(SoundEffect.voiceReconnect));
+      }
+      voiceReconnectPending = false;
+      voiceDisconnectSoundPlayed = false;
+    }
+    updateMutedSpeechReminder();
     final screenShareTrack = voiceSession.activeScreenShare?.track;
     setState(() {
       if (!identical(activeScreenShareTrack, screenShareTrack)) {
@@ -1386,6 +1444,32 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         screenShareCollapsed = false;
       }
     });
+  }
+
+  void onMicrophoneActivityChanged() => updateMutedSpeechReminder();
+
+  void updateMutedSpeechReminder() {
+    final snapshot = voiceSession.snapshot;
+    mutedSpeechReminder.update(
+      muted: snapshot.muted,
+      listenOff: snapshot.listenOff,
+      active: voiceSession.microphoneInputActive.value,
+    );
+  }
+
+  void onMutedSpeechWarning() {
+    if (!mounted) return;
+    unawaited(soundEffects.play(SoundEffect.mutedSpeaking));
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+      const SnackBar(content: Text('你已静音'), duration: Duration(seconds: 2)),
+    );
+  }
+
+  void clearVoiceReconnectSound() {
+    voiceDisconnectSoundTimer?.cancel();
+    voiceDisconnectSoundTimer = null;
+    voiceReconnectPending = false;
+    voiceDisconnectSoundPlayed = false;
   }
 
   Future<void> showScreenShareWindow() async {
@@ -1409,7 +1493,15 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   }
 
   void onAudioDevicesChanged() {
-    if (!mounted || !audioDeviceMonitor.lastRefreshSucceeded) return;
+    if (!mounted) return;
+    if (!audioDeviceMonitor.lastRefreshSucceeded) {
+      if (voiceSession.isJoined && !audioDeviceErrorActive) {
+        audioDeviceErrorActive = true;
+        unawaited(soundEffects.play(SoundEffect.error));
+        setState(() => error = '无法读取音频设备，请检查麦克风权限');
+      }
+      return;
+    }
     final next = audioDeviceSelectionAfterRefresh(
       inputDeviceId: selectedAudioInputDeviceId,
       outputDeviceId: selectedAudioOutputDeviceId,
@@ -1422,6 +1514,13 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     final inputAvailable = audioDeviceMonitor.devices.any(
       (device) => device.kind == 'audioinput',
     );
+    if (voiceSession.isJoined && !inputAvailable && !audioDeviceErrorActive) {
+      audioDeviceErrorActive = true;
+      unawaited(soundEffects.play(SoundEffect.error));
+      setState(() => error = '未发现可用麦克风');
+    } else if (inputAvailable) {
+      audioDeviceErrorActive = false;
+    }
     ClientLog.write(
       'audio.devices',
       'selection input=${next.inputDeviceId ?? 'system'} '
@@ -1609,7 +1708,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     socketGeneration += 1;
     final closingSocket = socket;
     socket = null;
-    await voiceSession.leave(clearVoiceState: true);
+    await leaveVoiceSession(clearVoiceState: true);
     voiceSession.stopServerLatencyMonitor();
     await closingSocket?.close();
     if (!mounted) return;
@@ -1769,6 +1868,10 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     audioOutputVolume = (prefs.getDouble(audioOutputVolumeKey) ?? 1.0)
         .clamp(0.0, 1.0)
         .toDouble();
+    soundEffectVolume = (prefs.getDouble(soundEffectVolumeKey) ?? 1.0)
+        .clamp(0.0, 1.0)
+        .toDouble();
+    soundEffects.volume = soundEffectVolume;
     noiseSuppressionEnabled = prefs.getBool(noiseSuppressionEnabledKey) ?? true;
     microphoneActivationMode = MicrophoneActivationModeValue.parse(
       prefs.getString(microphoneActivationModeKey),
@@ -2547,7 +2650,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     await runGuarded(() async {
       await client.deleteChannel(auth.token, channel.id);
       if (deletingSelectedChannel && voiceSession.isJoined) {
-        await voiceSession.leave(clearVoiceState: false);
+        await leaveVoiceSession(clearVoiceState: false);
       }
       await refreshServerState();
     });
@@ -2645,6 +2748,30 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     }
     try {
       final state = VoiceState.fromJson(raw.cast<String, dynamic>());
+      final previousState = presence.voiceStates
+          .where((item) => item.userId == state.userId)
+          .firstOrNull;
+      final inCurrentVoiceChannel =
+          state.channelId == voiceSession.currentChannelId;
+      if (state.userId != session?.user.id && inCurrentVoiceChannel) {
+        if (event.type == 'voice.joined') {
+          unawaited(soundEffects.play(SoundEffect.memberJoin));
+        } else if (event.type == 'voice.left') {
+          unawaited(soundEffects.play(SoundEffect.memberLeave));
+        }
+      }
+      if (event.type == 'voice.state_changed' &&
+          inCurrentVoiceChannel &&
+          previousState != null &&
+          previousState.screenSharing != state.screenSharing) {
+        unawaited(
+          soundEffects.play(
+            state.screenSharing
+                ? SoundEffect.screenShareStart
+                : SoundEffect.screenShareStop,
+          ),
+        );
+      }
       final voiceStates = presence.voiceStates
           .where((item) => item.userId != state.userId)
           .toList();
@@ -3479,6 +3606,12 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       if (becameVisible || message?.senderUserId == session?.user.id) {
         return;
       }
+      unawaited(
+        soundEffects.play(
+          SoundEffect.messageChannel,
+          cooldown: const Duration(seconds: 1),
+        ),
+      );
       setState(() {
         addChannelUnread(
           channelId,
@@ -3494,6 +3627,12 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       final message = await fetchChannelMessageForEvent(channelId, messageId);
       if (!mounted) return;
       if (message?.senderUserId == session?.user.id) return;
+      unawaited(
+        soundEffects.play(
+          SoundEffect.messageChannel,
+          cooldown: const Duration(seconds: 1),
+        ),
+      );
       setState(() {
         showCurrentChatNewMessageHint();
         addChannelUnread(
@@ -3811,6 +3950,14 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         }
       }
     });
+    if (!mine && (!activeDirect || !wasAtBottom)) {
+      unawaited(
+        soundEffects.play(
+          SoundEffect.messageDirect,
+          cooldown: const Duration(seconds: 1),
+        ),
+      );
+    }
     if (activeDirect && wasAtBottom) {
       WidgetsBinding.instance.addPostFrameCallback(
         (_) => scrollMessagesToEnd(),
@@ -3977,9 +4124,13 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
           } else {
             await uploadChannelAttachment(task);
           }
+          unawaited(soundEffects.play(SoundEffect.messageSend));
           if (mounted) setState(() => uploadTasks.remove(task));
         } catch (e) {
           if (!mounted) return;
+          if (!task.cancelToken.isCancelled) {
+            unawaited(soundEffects.play(SoundEffect.error));
+          }
           setState(() {
             if (task.cancelToken.isCancelled) {
               uploadTasks.remove(task);
@@ -5496,6 +5647,8 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     }
     final activeGeneration = generation ?? connectionGeneration;
     if (!isActiveConnectionGeneration(activeGeneration)) return;
+    final previousVoiceChannelId = voiceSession.currentChannelId;
+    final wasVoiceConnected = voiceSession.snapshot.connected;
     final voiceJoinRequest = voiceSession.beginJoinRequest();
     final channelMemberUserIds = voiceChannelMemberUserIds(
       presence,
@@ -5566,6 +5719,10 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       }
       final state = voiceSession.snapshot.voiceState;
       if (state != null) setState(() => myVoiceState = state);
+      if (voiceSession.snapshot.connected &&
+          (!wasVoiceConnected || previousVoiceChannelId != targetChannel.id)) {
+        unawaited(soundEffects.play(SoundEffect.memberJoin));
+      }
       scheduleRealtimeStateRefresh();
     });
   }
@@ -5573,11 +5730,18 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   Future<void> leaveLiveKitVoice() async {
     final activeGeneration = connectionGeneration;
     await runGuarded(() async {
-      await voiceSession.leave(clearVoiceState: true);
+      await leaveVoiceSession(clearVoiceState: true);
       if (!isActiveConnectionGeneration(activeGeneration)) return;
       setState(() => myVoiceState = null);
       scheduleRealtimeStateRefresh();
     });
+  }
+
+  Future<void> leaveVoiceSession({required bool clearVoiceState}) async {
+    final wasJoined = voiceSession.isJoined;
+    clearVoiceReconnectSound();
+    await voiceSession.leave(clearVoiceState: clearVoiceState);
+    if (wasJoined) unawaited(soundEffects.play(SoundEffect.memberLeave));
   }
 
   Future<void> setMuted(bool value) async {
@@ -5616,6 +5780,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     var nextMicrophoneActivationMode = microphoneActivationMode;
     var nextMicrophoneThreshold = microphoneThreshold;
     var nextPushToTalkHotkey = microphonePushToTalkHotkey;
+    var nextSoundEffectVolume = soundEffectVolume;
     var selectedPage = 'profile';
     try {
       final action = await showDialog<String>(
@@ -5652,8 +5817,15 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                   initialActivationMode: microphoneActivationMode,
                   initialThreshold: microphoneThreshold,
                   initialPushToTalkHotkey: microphonePushToTalkHotkey,
+                  initialSoundEffectVolume: soundEffectVolume,
                   microphoneInputLevel: voiceSession.microphoneInputLevel,
                   captureCoordinator: voiceSession,
+                  onSoundEffectPreview: (volume) => unawaited(
+                    soundEffects.play(
+                      SoundEffect.messageDirect,
+                      volume: volume,
+                    ),
+                  ),
                   onSave:
                       (
                         inputId,
@@ -5661,12 +5833,14 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                         activationMode,
                         threshold,
                         pushToTalkHotkey,
+                        effectVolume,
                       ) {
                         nextInputDeviceId = inputId;
                         nextOutputDeviceId = outputId;
                         nextMicrophoneActivationMode = activationMode;
                         nextMicrophoneThreshold = threshold;
                         nextPushToTalkHotkey = pushToTalkHotkey;
+                        nextSoundEffectVolume = effectVolume;
                         Navigator.pop(context, 'save-audio');
                       },
                 ),
@@ -5740,6 +5914,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
             activationMode: nextMicrophoneActivationMode,
             threshold: nextMicrophoneThreshold,
             pushToTalkHotkeyBinding: nextPushToTalkHotkey,
+            effectVolume: nextSoundEffectVolume,
           );
         case null:
           return;
@@ -7732,6 +7907,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     required MicrophoneActivationMode activationMode,
     required double threshold,
     required MicrophoneHotkeyBinding? pushToTalkHotkeyBinding,
+    required double effectVolume,
   }) {
     setState(() {
       selectedAudioInputDeviceId = inputDeviceId;
@@ -7739,6 +7915,8 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       microphoneActivationMode = activationMode;
       microphoneThreshold = threshold.clamp(0.0, 1.0).toDouble();
       microphonePushToTalkHotkey = pushToTalkHotkeyBinding;
+      soundEffectVolume = effectVolume.clamp(0.0, 1.0).toDouble();
+      soundEffects.volume = soundEffectVolume;
     });
     return runGuarded(() async {
       final prefs = await SharedPreferences.getInstance();
@@ -7748,6 +7926,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         activationMode.preferenceValue,
       );
       await prefs.setDouble(microphoneThresholdKey, microphoneThreshold);
+      await prefs.setDouble(soundEffectVolumeKey, soundEffectVolume);
       if (pushToTalkHotkeyBinding == null) {
         await prefs.remove(microphonePushToTalkHotkeyKey);
       } else {
@@ -9942,8 +10121,10 @@ class OsClientAudioSettingsPane extends StatefulWidget {
     required this.initialActivationMode,
     required this.initialThreshold,
     required this.initialPushToTalkHotkey,
+    required this.initialSoundEffectVolume,
     required this.microphoneInputLevel,
     required this.onSave,
+    required this.onSoundEffectPreview,
     this.captureCoordinator,
   });
 
@@ -9953,6 +10134,7 @@ class OsClientAudioSettingsPane extends StatefulWidget {
   final MicrophoneActivationMode initialActivationMode;
   final double initialThreshold;
   final MicrophoneHotkeyBinding? initialPushToTalkHotkey;
+  final double initialSoundEffectVolume;
   final ValueListenable<double> microphoneInputLevel;
   final VoiceSessionController? captureCoordinator;
   final void Function(
@@ -9961,8 +10143,10 @@ class OsClientAudioSettingsPane extends StatefulWidget {
     MicrophoneActivationMode activationMode,
     double threshold,
     MicrophoneHotkeyBinding? pushToTalkHotkey,
+    double soundEffectVolume,
   )
   onSave;
+  final ValueChanged<double> onSoundEffectPreview;
 
   @override
   State<OsClientAudioSettingsPane> createState() =>
@@ -9974,6 +10158,7 @@ class _OsClientAudioSettingsPaneState extends State<OsClientAudioSettingsPane> {
   String outputValue = '';
   late MicrophoneActivationMode activationMode;
   late double threshold;
+  late double soundEffectVolume;
   MicrophoneHotkeyBinding? pushToTalkHotkey;
   bool recordingHotkey = false;
   bool saving = false;
@@ -9987,6 +10172,9 @@ class _OsClientAudioSettingsPaneState extends State<OsClientAudioSettingsPane> {
     outputValue = widget.initialOutputDeviceId ?? '';
     activationMode = widget.initialActivationMode;
     threshold = widget.initialThreshold;
+    soundEffectVolume = widget.initialSoundEffectVolume
+        .clamp(0.0, 1.0)
+        .toDouble();
     pushToTalkHotkey = widget.initialPushToTalkHotkey;
     microphoneLevelPreview = MicrophoneInputLevelPreview(
       fallbackLevel: widget.microphoneInputLevel,
@@ -10042,6 +10230,7 @@ class _OsClientAudioSettingsPaneState extends State<OsClientAudioSettingsPane> {
       activationMode,
       threshold,
       pushToTalkHotkey,
+      soundEffectVolume,
     );
   }
 
@@ -10223,6 +10412,39 @@ class _OsClientAudioSettingsPaneState extends State<OsClientAudioSettingsPane> {
               onChanged: (value) {
                 setState(() => outputValue = value ?? '');
               },
+            ),
+          ),
+          const SizedBox(height: 12),
+          OsFormCard(
+            icon: Icons.music_note_rounded,
+            title: '音效',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    const Expanded(child: OsFieldLabel('音效音量')),
+                    Text(
+                      '${(soundEffectVolume * 100).round()}%',
+                      key: const ValueKey('sound-effect-volume-percent'),
+                      style: const TextStyle(
+                        color: OsColors.text,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                        fontFeatures: [ui.FontFeature.tabularFigures()],
+                      ),
+                    ),
+                  ],
+                ),
+                Slider(
+                  key: const ValueKey('sound-effect-volume-slider'),
+                  value: soundEffectVolume,
+                  divisions: 100,
+                  onChanged: (value) =>
+                      setState(() => soundEffectVolume = value),
+                  onChangeEnd: widget.onSoundEffectPreview,
+                ),
+              ],
             ),
           ),
         ],

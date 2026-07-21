@@ -762,6 +762,7 @@ class VoiceSessionController extends ChangeNotifier {
       WindowsMicrophoneActivityDetector();
   bool _localAudioActive = false;
   final ValueNotifier<double> microphoneInputLevel = ValueNotifier(0);
+  final ValueNotifier<bool> microphoneInputActive = ValueNotifier(false);
 
   bool get isJoined =>
       snapshot.connected || snapshot.connecting || snapshot.voiceState != null;
@@ -2519,6 +2520,7 @@ class VoiceSessionController extends ChangeNotifier {
             nextInputLevel == 0) {
           microphoneInputLevel.value = nextInputLevel;
         }
+        microphoneInputActive.value = localAudioActive;
       }
       if (!setEquals(snapshot.liveKitParticipantUserIds, participantUserIds) ||
           !setEquals(snapshot.liveKitSpeakingUserIds, speakingUserIds)) {
@@ -2982,6 +2984,7 @@ class VoiceSessionController extends ChangeNotifier {
     _microphoneGateOpen = shouldOpenGate;
     if (!shouldOpenGate) {
       _localAudioActive = false;
+      microphoneInputActive.value = false;
       if (!_shouldKeepMicrophoneTrack()) microphoneInputLevel.value = 0;
       _setLocalSpeaking(false);
     }
@@ -3210,8 +3213,7 @@ class VoiceSessionController extends ChangeNotifier {
       defaultTargetPlatform,
       isWeb: kIsWeb,
     );
-    if (snapshot.muted ||
-        track is! lk.LocalAudioTrack ||
+    if (track is! lk.LocalAudioTrack ||
         (!pcmSupported && !windowsLevelSupported)) {
       await _releaseMicrophoneMonitor();
       return;
@@ -3294,6 +3296,7 @@ class VoiceSessionController extends ChangeNotifier {
         windowsMicrophoneLevelSupported(defaultTargetPlatform, isWeb: kIsWeb)
         ? _windowsActivityDetector.update(rms)
         : microphoneRmsIndicatesActivity(rms);
+    microphoneInputActive.value = _localAudioActive;
     unawaited(_updateMicrophoneThresholdGate(rms));
     _setLocalSpeaking(switch (_microphoneActivationMode) {
       MicrophoneActivationMode.pushToTalk =>
@@ -3311,6 +3314,7 @@ class VoiceSessionController extends ChangeNotifier {
     _windowsMicrophoneLevelIdleTimer?.cancel();
     _windowsMicrophoneLevelIdleTimer = null;
     _localAudioActive = false;
+    if (!_disposed) microphoneInputActive.value = false;
     _windowsActivityDetector.reset();
     await _windowsMicrophoneLevelMonitor.stop();
     if (remove != null) {
@@ -3618,6 +3622,7 @@ class VoiceSessionController extends ChangeNotifier {
     _thresholdGateOpen = false;
     _thresholdReleaseAt = null;
     microphoneInputLevel.value = 0;
+    microphoneInputActive.value = false;
     final listener = _roomListener;
     _roomListener = null;
     await _disposeRemoteParticipantListeners();
@@ -3689,6 +3694,7 @@ class VoiceSessionController extends ChangeNotifier {
     unawaited(_screenShareTransitionTail.whenComplete(_disposeScreenRoom));
     unawaited(_disposeRoom());
     microphoneInputLevel.dispose();
+    microphoneInputActive.dispose();
     super.dispose();
   }
 }

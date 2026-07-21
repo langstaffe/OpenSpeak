@@ -68,6 +68,7 @@ flutter:
 
   assets:
     - assets/images/noise_suppression.png
+    - assets/sounds/
 
   fonts:
     - family: NotoSansSC

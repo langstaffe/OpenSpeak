@@ -6,6 +6,7 @@ import 'dart:ui' show PointerDeviceKind;
 
 import 'package:flutter/gestures.dart' show kSecondaryMouseButton;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart' as rtc;
 import 'package:livekit_client/livekit_client.dart' as lk;
@@ -14,9 +15,49 @@ import 'package:openspeak_flutter/device_identity_service.dart';
 import 'package:openspeak_flutter/main.dart';
 import 'package:openspeak_flutter/microphone_activation.dart';
 import 'package:openspeak_flutter/openspeak_api.dart';
+import 'package:openspeak_flutter/sound_effects.dart';
 import 'package:openspeak_flutter/voice_session_controller.dart';
 
 void main() {
+  testWidgets('all sound effects are bundled as WAV files', (_) async {
+    for (final effect in SoundEffect.values) {
+      final bytes = await rootBundle.load('assets/${effect.asset}');
+      expect(bytes.lengthInBytes, greaterThan(44), reason: effect.name);
+      expect(bytes.buffer.asUint8List(bytes.offsetInBytes, 4), [
+        0x52,
+        0x49,
+        0x46,
+        0x46,
+      ], reason: effect.name);
+    }
+  });
+
+  testWidgets('muted speech reminder delays, repeats, and resets', (
+    tester,
+  ) async {
+    var warnings = 0;
+    final reminder = MutedSpeechReminder(() => warnings += 1);
+
+    reminder.update(muted: true, listenOff: false, active: true);
+    await tester.pump(const Duration(milliseconds: 1499));
+    expect(warnings, 0);
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(warnings, 1);
+    await tester.pump(const Duration(seconds: 10));
+    expect(warnings, 2);
+
+    reminder.update(muted: true, listenOff: false, active: false);
+    await tester.pump(const Duration(seconds: 2));
+    reminder.update(muted: true, listenOff: false, active: true);
+    await tester.pump(const Duration(milliseconds: 1500));
+    expect(warnings, 3);
+
+    reminder.update(muted: true, listenOff: true, active: true);
+    await tester.pump(const Duration(seconds: 12));
+    expect(warnings, 3);
+    reminder.dispose();
+  });
+
   test('client diagnostics are written to a local log file', () async {
     final directory = await Directory.systemTemp.createTemp('openspeak-log-');
     try {
@@ -1634,6 +1675,7 @@ void main() {
     );
     await monitor.start();
     final microphoneLevel = ValueNotifier(0.68);
+    double? previewVolume;
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -1644,8 +1686,10 @@ void main() {
             initialActivationMode: MicrophoneActivationMode.continuous,
             initialThreshold: 0.4,
             initialPushToTalkHotkey: null,
+            initialSoundEffectVolume: 1,
             microphoneInputLevel: microphoneLevel,
-            onSave: (_, _, _, _, _) {},
+            onSoundEffectPreview: (value) => previewVolume = value,
+            onSave: (_, _, _, _, _, _) {},
           ),
         ),
       ),
@@ -1656,6 +1700,19 @@ void main() {
     expect(find.text('持续传输'), findsOneWidget);
     expect(find.text('语音阈值'), findsOneWidget);
     expect(find.textContaining('房间存在其他参与者'), findsOneWidget);
+    expect(find.text('音效'), findsOneWidget);
+    expect(find.text('100%'), findsOneWidget);
+    var effectSlider = tester.widget<Slider>(
+      find.byKey(const ValueKey('sound-effect-volume-slider')),
+    );
+    effectSlider.onChanged!(0.42);
+    await tester.pump();
+    expect(find.text('42%'), findsOneWidget);
+    effectSlider = tester.widget<Slider>(
+      find.byKey(const ValueKey('sound-effect-volume-slider')),
+    );
+    effectSlider.onChangeEnd!(0.42);
+    expect(previewVolume, 0.42);
 
     await tester.tap(find.text('语音阈值'));
     await tester.pumpAndSettle();
@@ -1729,8 +1786,10 @@ void main() {
             initialActivationMode: MicrophoneActivationMode.continuous,
             initialThreshold: 0.4,
             initialPushToTalkHotkey: null,
+            initialSoundEffectVolume: 1,
             microphoneInputLevel: level,
-            onSave: (_, _, _, _, _) {},
+            onSoundEffectPreview: (_) {},
+            onSave: (_, _, _, _, _, _) {},
           ),
         ),
       ),
@@ -2306,7 +2365,7 @@ void main() {
 
     expect(find.text('+'), findsOneWidget);
     expect(find.text('未连接'), findsNothing);
-    expect(find.text('Admin'), findsOneWidget);
+    expect(find.text('user'), findsOneWidget);
   });
 
   testWidgets('channel list extends behind the fixed current user card', (
