@@ -1103,6 +1103,76 @@ func TestRolePermissionTemplateIsAuthoritativeForChannelMessages(t *testing.T) {
 	send("hello", http.StatusForbidden)
 }
 
+func TestChannelAccessOnlyGrantsMembershipWithoutEnteringVoice(t *testing.T) {
+	env := newChannelTestEnv(t, "e2ee")
+	ctx := context.Background()
+	member, err := env.repo.CreateUser(ctx, "Member")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.repo.SetServerMember(ctx, env.os.ID, member.ID, store.RoleUser, nil); err != nil {
+		t.Fatal(err)
+	}
+	token := mustToken(t, env.server.cfg, member.ID)
+	requestMessages := func() *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/channels/"+env.channel.ID+"/messages", nil)
+		request.Header.Set("Authorization", "Bearer "+token)
+		response := httptest.NewRecorder()
+		env.server.ServeHTTP(response, request)
+		return response
+	}
+	requestAccess := func() *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/channels/"+env.channel.ID+"/join", strings.NewReader(`{"user_id":"`+member.ID+`","role":"admin","access_only":true}`))
+		request.Header.Set("Authorization", "Bearer "+token)
+		response := httptest.NewRecorder()
+		env.server.ServeHTTP(response, request)
+		return response
+	}
+
+	if response := requestMessages(); response.Code != http.StatusForbidden {
+		t.Fatalf("messages before access = %d, body = %s", response.Code, response.Body.String())
+	}
+	if response := requestAccess(); response.Code != http.StatusOK {
+		t.Fatalf("access = %d, body = %s", response.Code, response.Body.String())
+	}
+	if _, ok := env.hub.CurrentChannel(env.os.ID, member.ID); ok {
+		t.Fatal("access-only request entered the voice channel")
+	}
+	hasAccess, err := env.repo.IsChannelMemberOrOwnerOrAdmin(ctx, env.channel.ID, member.ID)
+	if err != nil || !hasAccess {
+		t.Fatalf("channel access = %v, err = %v", hasAccess, err)
+	}
+	members, err := env.repo.ListChannelMembers(ctx, env.channel.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, channelMember := range members {
+		if channelMember.UserID == member.ID && channelMember.Role != "member" {
+			t.Fatalf("access-only role = %q", channelMember.Role)
+		}
+	}
+	latest, err := env.repo.GetLatestEpoch(ctx, env.channel.ID)
+	if err != nil || latest.EpochNumber != env.epoch.EpochNumber+1 || latest.Reason != "access_granted" {
+		t.Fatalf("access epoch = %#v, err = %v", latest, err)
+	}
+	if response := requestMessages(); response.Code != http.StatusOK {
+		t.Fatalf("messages after access = %d, body = %s", response.Code, response.Body.String())
+	}
+	if response := requestAccess(); response.Code != http.StatusOK {
+		t.Fatalf("repeated access = %d, body = %s", response.Code, response.Body.String())
+	}
+	unchanged, err := env.repo.GetLatestEpoch(ctx, env.channel.ID)
+	if err != nil || unchanged.ID != latest.ID {
+		t.Fatalf("repeated access rotated epoch = %#v, err = %v", unchanged, err)
+	}
+	if _, err := env.repo.SetServerRolePermissions(ctx, env.os.ID, store.AdminPermissions(), []string{}, env.user.ID); err != nil {
+		t.Fatal(err)
+	}
+	if response := requestAccess(); response.Code != http.StatusForbidden {
+		t.Fatalf("access without view permission = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
 func TestChannelMessageDeleteAllowsOwnMessageOrManagePermission(t *testing.T) {
 	env := newChannelTestEnv(t, "none")
 	ctx := context.Background()

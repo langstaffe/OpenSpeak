@@ -928,6 +928,15 @@ class OpenSpeakApi {
     );
   }
 
+  Future<void> accessChannel(String token, String channelId) async {
+    await request(
+      'POST',
+      '/api/v1/channels/$channelId/join',
+      token: token,
+      body: {'access_only': true},
+    );
+  }
+
   Future<void> leaveChannel(
     String token,
     String channelId, {

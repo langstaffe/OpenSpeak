@@ -1888,8 +1888,9 @@ func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request, authCtx 
 			return
 		}
 		var req struct {
-			UserID string `json:"user_id"`
-			Role   string `json:"role"`
+			UserID     string `json:"user_id"`
+			Role       string `json:"role"`
+			AccessOnly bool   `json:"access_only"`
 		}
 		if !decodeJSON(w, r, &req) {
 			return
@@ -1904,14 +1905,24 @@ func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request, authCtx 
 			targetUserID = authCtx.User.ID
 		}
 		if targetUserID == authCtx.User.ID {
+			permission := store.PermissionVoiceJoin
+			if req.AccessOnly {
+				permission = store.PermissionChannelMessagesView
+			}
 			if !s.requireServerAccess(w, r, authCtx, channel.ServerID) ||
-				!s.requireServerPermission(w, r, authCtx, channel.ServerID, store.PermissionVoiceJoin) {
+				!s.requireServerPermission(w, r, authCtx, channel.ServerID, permission) {
 				return
 			}
-		} else if !s.requireChannelServerPermission(w, r, authCtx, channelID, store.PermissionMemberMove) {
-			return
+		} else {
+			if req.AccessOnly {
+				writeError(w, http.StatusBadRequest, "invalid_access", "access_only is available only for the current user")
+				return
+			}
+			if !s.requireChannelServerPermission(w, r, authCtx, channelID, store.PermissionMemberMove) {
+				return
+			}
 		}
-		if !s.hub.UserOnlineInServer(channel.ServerID, targetUserID) {
+		if !req.AccessOnly && !s.hub.UserOnlineInServer(channel.ServerID, targetUserID) {
 			writeError(w, http.StatusConflict, "websocket_required", "open a server WebSocket connection before entering a channel")
 			return
 		}
@@ -1922,7 +1933,11 @@ func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request, authCtx 
 		}
 		var epoch *store.ChannelEpoch
 		if !hasAccess {
-			if err := s.repo.AddChannelMember(r.Context(), channelID, targetUserID, req.Role); err != nil {
+			role := req.Role
+			if req.AccessOnly {
+				role = "member"
+			}
+			if err := s.repo.AddChannelMember(r.Context(), channelID, targetUserID, role); err != nil {
 				writeResult(w, nil, err)
 				return
 			}
@@ -1932,6 +1947,17 @@ func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request, authCtx 
 				return
 			}
 			epoch = &created
+		}
+		if req.AccessOnly {
+			if epoch != nil {
+				s.beginMediaKeyTransition(r.Context(), channel.ServerID, *epoch)
+				s.hub.Publish(realtime.Event{
+					Type: "channel.access_granted", ServerID: channel.ServerID, ChannelID: channelID,
+					Payload: map[string]any{"user_id": targetUserID, "epoch": *epoch},
+				})
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"access_granted": epoch != nil, "epoch": epoch})
+			return
 		}
 		previous, hadPrevious := s.hub.CurrentChannel(channel.ServerID, targetUserID)
 		state := s.hub.SetCurrentChannel(channel.ServerID, targetUserID, channelID)

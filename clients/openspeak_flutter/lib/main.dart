@@ -1229,6 +1229,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   int socketGeneration = 0;
   Timer? realtimeStateRefreshTimer;
   int channelMessagesLoadGeneration = 0;
+  int channelSelectionGeneration = 0;
   final channelJoinQueue = LatestChannelJoinQueue();
   String? voiceChannelSwitchTargetId;
   AuthSession? session;
@@ -2211,6 +2212,11 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     );
     if (!websocketConnected) return;
     if (!isActiveConnectionGeneration(activeGeneration)) return;
+    if (!hasServerPermission('voice.join') &&
+        hasServerPermission('channel.messages.view')) {
+      await client.accessChannel(auth.token, targetChannel.id);
+      if (!isActiveConnectionGeneration(activeGeneration)) return;
+    }
     if (hasServerPermission('voice.join')) {
       await joinChannelAsCurrentUser(targetChannel);
     }
@@ -2231,6 +2237,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     final client = api;
     final auth = session;
     if (client == null || auth == null) return;
+    final selectionGeneration = ++channelSelectionGeneration;
     String? joinedChannelId;
     for (final user in presence.users) {
       if (user.userId == auth.user.id) {
@@ -2262,6 +2269,11 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     await runGuarded(() async {
       final previous = selectedChannel;
       final channelChanged = previous?.id != channel.id;
+      if (channelChanged &&
+          !shouldJoin &&
+          hasServerPermission('channel.messages.view')) {
+        await client.accessChannel(auth.token, channel.id);
+      }
       if (shouldJoin) {
         final joinedLatest = await channelJoinQueue.run(
           channelJoinGeneration!,
@@ -2274,10 +2286,15 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
           },
         );
         if (!joinedLatest ||
+            selectionGeneration != channelSelectionGeneration ||
             !isActiveConnectionGeneration(activeConnectionGeneration)) {
           return;
         }
         switchVoice = voiceSession.isJoined;
+      }
+      if (selectionGeneration != channelSelectionGeneration ||
+          !isActiveConnectionGeneration(activeConnectionGeneration)) {
+        return;
       }
       if (channelChanged || chatScope != ChatScope.channel) {
         setState(() {
