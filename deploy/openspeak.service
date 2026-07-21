@@ -1,0 +1,23 @@
+[Unit]
+Description=OpenSpeak Server
+After=network-online.target openspeak-caddy.service
+Wants=network-online.target
+Requires=openspeak-caddy.service
+
+[Service]
+Type=simple
+User=openspeak
+Group=openspeak
+EnvironmentFile=/etc/openspeak/openspeak.env
+ExecStart=/opt/openspeak/openspeak-linux-amd64
+Restart=on-failure
+RestartSec=3
+WorkingDirectory=/opt/openspeak
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/openspeak /var/log/openspeak
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,49 @@
+PODS:
+  - desktop_drop (0.0.1):
+    - FlutterMacOS
+  - flutter_secure_storage_macos (6.1.3):
+    - FlutterMacOS
+  - flutter_webrtc (1.4.0):
+    - FlutterMacOS
+    - WebRTC-SDK (= 144.7559.01)
+  - FlutterMacOS (1.0.0)
+  - livekit_client (2.8.1):
+    - flutter_webrtc
+    - FlutterMacOS
+    - WebRTC-SDK (= 144.7559.01)
+  - WebRTC-SDK (144.7559.01)
+
+DEPENDENCIES:
+  - desktop_drop (from `Flutter/ephemeral/.symlinks/plugins/desktop_drop/macos`)
+  - flutter_secure_storage_macos (from `Flutter/ephemeral/.symlinks/plugins/flutter_secure_storage_macos/macos`)
+  - flutter_webrtc (from `Flutter/ephemeral/.symlinks/plugins/flutter_webrtc/macos`)
+  - FlutterMacOS (from `Flutter/ephemeral`)
+  - livekit_client (from `Flutter/ephemeral/.symlinks/plugins/livekit_client/macos`)
+
+SPEC REPOS:
+  trunk:
+    - WebRTC-SDK
+
+EXTERNAL SOURCES:
+  desktop_drop:
+    :path: Flutter/ephemeral/.symlinks/plugins/desktop_drop/macos
+  flutter_secure_storage_macos:
+    :path: Flutter/ephemeral/.symlinks/plugins/flutter_secure_storage_macos/macos
+  flutter_webrtc:
+    :path: Flutter/ephemeral/.symlinks/plugins/flutter_webrtc/macos
+  FlutterMacOS:
+    :path: Flutter/ephemeral
+  livekit_client:
+    :path: Flutter/ephemeral/.symlinks/plugins/livekit_client/macos
+
+SPEC CHECKSUMS:
+  desktop_drop: e0b672a7d84c0a6cbc378595e82cdb15f2970a43
+  flutter_secure_storage_macos: 7f45e30f838cf2659862a4e4e3ee1c347c2b3b54
+  flutter_webrtc: f1fb1a00c6080461bb2bc6caa5b93d07ddb68466
+  FlutterMacOS: d0db08ddef1a9af05a5ec4b724367152bb0500b1
+  livekit_client: 327ec886ef09de0f2d790f7b47c02ebb6fcd3c58
+  WebRTC-SDK: ab9b5319e458c2bfebdc92b3600740da35d5630d
+
+PODFILE CHECKSUM: 4c3538322c36460e6156c2015d2cee8c5d0153ab
+
+COCOAPODS: 1.16.2

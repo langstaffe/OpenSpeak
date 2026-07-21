@@ -1,0 +1,46 @@
+.DS_Store
+/AGENTS.md
+.local/
+dist/
+openspeak-linux-amd64
+openspeak-file-node-linux-amd64
+openspeakctl-linux-amd64
+
+# Local secrets and signing material
+.env
+.env.*
+*.env
+*.env.*
+!*.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.mobileprovision
+id_rsa
+id_ed25519
+
+*.log
+*.db
+*.sqlite
+*.sqlite3
+
+# Go
+*.test
+*.out
+coverage.out
+
+# Flutter / Dart
+**/.dart_tool/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/.packages
+**/build/
+**/macos/Flutter/ephemeral/
+**/macos/Pods/
+**/windows/flutter/ephemeral/
+
+# IDE local state
+**/.idea/workspace.xml

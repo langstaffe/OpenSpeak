@@ -1,0 +1,100 @@
+diff --git a/macos/Classes/FlutterRTCDesktopCapturer.m b/macos/Classes/FlutterRTCDesktopCapturer.m
+--- a/macos/Classes/FlutterRTCDesktopCapturer.m
++++ b/macos/Classes/FlutterRTCDesktopCapturer.m
+@@ -93,6 +93,8 @@
+   NSString* sourceId = nil;
+   BOOL useDefaultScreen = NO;
+   NSInteger fps = 30;
++  NSInteger maxWidth = 0;
++  NSInteger maxHeight = 0;
+   id videoConstraints = constraints[@"video"];
+   if ([videoConstraints isKindOfClass:[NSNumber class]] && [videoConstraints boolValue] == YES) {
+     useDefaultScreen = YES;
+@@ -110,6 +112,14 @@
+       // fall back to default screen if no deviceId is specified
+       useDefaultScreen = YES;
+     }
++    id width = videoConstraints[@"width"];
++    if ([width isKindOfClass:[NSNumber class]]) {
++      maxWidth = MAX(0, [width integerValue]);
++    }
++    id height = videoConstraints[@"height"];
++    if ([height isKindOfClass:[NSNumber class]]) {
++      maxHeight = MAX(0, [height integerValue]);
++    }
+     id mandatory = videoConstraints[@"mandatory"];
+     if (mandatory != nil && [mandatory isKindOfClass:[NSDictionary class]]) {
+       id frameRate = mandatory[@"frameRate"];
+@@ -145,6 +155,8 @@
+           [[FlutterScreenCaptureKitCapturer alloc] initWithDelegate:videoProcessingAdapter];
+       [screenCaptureKitCapturer startCaptureWithFPS:fps
+                                            sourceId:sourceId
++                                            maxWidth:maxWidth
++                                           maxHeight:maxHeight
+                                           onStarted:^(NSError * _Nullable error) {
+                                             if (error != nil) {
+                                               NSLog(@"ScreenCaptureKit start failed: %@", error);
+diff --git a/macos/Classes/FlutterScreenCaptureKitCapturer.h b/macos/Classes/FlutterScreenCaptureKitCapturer.h
+--- a/macos/Classes/FlutterScreenCaptureKitCapturer.h
++++ b/macos/Classes/FlutterScreenCaptureKitCapturer.h
+@@ -8,3 +8,5 @@
+ - (void)startCaptureWithFPS:(NSInteger)fps
+                    sourceId:(NSString* _Nullable)sourceId
++                    maxWidth:(NSInteger)maxWidth
++                   maxHeight:(NSInteger)maxHeight
+                   onStarted:(void (^)(NSError * _Nullable error))onStarted;
+diff --git a/macos/Classes/FlutterScreenCaptureKitCapturer.m b/macos/Classes/FlutterScreenCaptureKitCapturer.m
+--- a/macos/Classes/FlutterScreenCaptureKitCapturer.m
++++ b/macos/Classes/FlutterScreenCaptureKitCapturer.m
+@@ -34,5 +34,7 @@
+ - (void)startCaptureWithFPS:(NSInteger)fps
+                    sourceId:(NSString* _Nullable)sourceId
++                    maxWidth:(NSInteger)maxWidth
++                   maxHeight:(NSInteger)maxHeight
+                   onStarted:(void (^)(NSError * _Nullable error))onStarted {
+ #if __has_include(<ScreenCaptureKit/ScreenCaptureKit.h>)
+   if (@available(macOS 12.3, *)) {
+@@ -54,7 +56,24 @@
+       SCContentFilter *filter = [[SCContentFilter alloc] initWithDisplay:display excludingWindows:@[]];
+       SCStreamConfiguration *config = [SCStreamConfiguration new];
+-      config.width = display.width;
+-      config.height = display.height;
++      CGDisplayModeRef displayMode = CGDisplayCopyDisplayMode(display.displayID);
++      size_t sourceWidth = displayMode != NULL
++          ? CGDisplayModeGetPixelWidth(displayMode)
++          : (size_t)display.width;
++      size_t sourceHeight = displayMode != NULL
++          ? CGDisplayModeGetPixelHeight(displayMode)
++          : (size_t)display.height;
++      if (displayMode != NULL) {
++        CGDisplayModeRelease(displayMode);
++      }
++      double scale = 1.0;
++      if (maxWidth > 0) {
++        scale = MIN(scale, (double)maxWidth / sourceWidth);
++      }
++      if (maxHeight > 0) {
++        scale = MIN(scale, (double)maxHeight / sourceHeight);
++      }
++      config.width = MAX((size_t)2, ((size_t)(sourceWidth * scale)) & ~(size_t)1);
++      config.height = MAX((size_t)2, ((size_t)(sourceHeight * scale)) & ~(size_t)1);
+       config.minimumFrameInterval = CMTimeMake(1, (int32_t)MAX(1, fps));
+       config.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
+       if (@available(macOS 13.0, *)) {
+diff --git a/macos/Classes/FlutterWebRTCPlugin.m b/macos/Classes/FlutterWebRTCPlugin.m
+--- a/macos/Classes/FlutterWebRTCPlugin.m
++++ b/macos/Classes/FlutterWebRTCPlugin.m
+@@ -190,9 +190,12 @@
+ #endif
+   }
+
+-  NSDictionary* fieldTrials = @{kRTCFieldTrialUseNWPathMonitor : kRTCFieldTrialEnabledValue};
++  NSDictionary* fieldTrials = @{
++    kRTCFieldTrialUseNWPathMonitor : kRTCFieldTrialEnabledValue,
++    @"WebRTC-Bwe-AlrProbing" : @"alr_interval:3s,alr_scale:2,loss_limited_scale:1.5"
++  };
+   RTCInitFieldTrialDictionary(fieldTrials);
+
+   self.peerConnections = [NSMutableDictionary new];
+   self.localStreams = [NSMutableDictionary new];
+   self.localTracks = [NSMutableDictionary new];

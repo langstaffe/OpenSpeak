@@ -1,0 +1,25 @@
+[Unit]
+Description=OpenSpeak TLS Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openspeak
+Group=openspeak
+Environment=HOME=/var/lib/openspeak
+Environment=CADDY_ADMIN=unix//var/lib/openspeak/caddy/admin.sock
+ExecStartPre=/usr/bin/rm -f /var/lib/openspeak/caddy/admin.sock
+ExecStart=/opt/openspeak/caddy run --config /var/lib/openspeak/caddy/Caddyfile --adapter caddyfile
+ExecReload=/opt/openspeak/caddy reload --config /var/lib/openspeak/caddy/Caddyfile --adapter caddyfile
+Restart=on-failure
+RestartSec=3
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/openspeak /var/log/openspeak
+
+[Install]
+WantedBy=multi-user.target

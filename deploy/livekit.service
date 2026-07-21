@@ -1,0 +1,21 @@
+[Unit]
+Description=OpenSpeak bundled LiveKit Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openspeak
+Group=openspeak
+ExecStart=/opt/openspeak/livekit-server --config /etc/openspeak/livekit.yaml
+Restart=on-failure
+RestartSec=3
+WorkingDirectory=/opt/openspeak
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/var/log/openspeak
+
+[Install]
+WantedBy=multi-user.target

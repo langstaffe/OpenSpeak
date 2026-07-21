@@ -1,0 +1,72 @@
+platform :osx, '10.15'
+
+# CocoaPods analytics sends network stats synchronously affecting flutter build latency.
+ENV['COCOAPODS_DISABLE_STATS'] = 'true'
+
+require 'fileutils'
+require 'json'
+
+project 'Runner', {
+  'Debug' => :debug,
+  'Profile' => :release,
+  'Release' => :release,
+}
+
+def flutter_root
+  generated_xcode_build_settings_path = File.expand_path(File.join('..', 'Flutter', 'ephemeral', 'Flutter-Generated.xcconfig'), __FILE__)
+  unless File.exist?(generated_xcode_build_settings_path)
+    raise "#{generated_xcode_build_settings_path} must exist. If you're running pod install manually, make sure \"flutter pub get\" is executed first"
+  end
+
+  File.foreach(generated_xcode_build_settings_path) do |line|
+    matches = line.match(/FLUTTER_ROOT\=(.*)/)
+    return matches[1].strip if matches
+  end
+  raise "FLUTTER_ROOT not found in #{generated_xcode_build_settings_path}. Try deleting Flutter-Generated.xcconfig, then run \"flutter pub get\""
+end
+
+require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelper'), flutter_root)
+
+flutter_macos_podfile_setup
+
+def with_patched_flutter_webrtc_macos
+  plugins_file = File.join(__dir__, '..', '.flutter-plugins-dependencies')
+  original_plugins = File.read(plugins_file)
+  patched_root = File.join(__dir__, 'Flutter', 'ephemeral', '.patched_plugins', 'flutter_webrtc')
+  plugins = JSON.parse(original_plugins)
+  plugin = plugins.fetch('plugins').fetch('macos')
+    .find { |entry| entry.fetch('name') == 'flutter_webrtc' }
+  raise 'flutter_webrtc macOS plugin is missing; run flutter pub get' if plugin.nil?
+
+  begin
+    FileUtils.rm_rf(patched_root)
+    FileUtils.mkdir_p(File.dirname(patched_root))
+    FileUtils.cp_r(plugin.fetch('path'), patched_root)
+    patch = File.join(__dir__, 'patches', 'flutter_webrtc_macos_hidpi.patch')
+    raise 'Failed to patch flutter_webrtc macOS HiDPI capture' unless
+      system('patch', '-Nst', '-p1', '-r', '/dev/null', '-d', patched_root, '-i', patch)
+
+    plugin['path'] = "#{patched_root}/"
+    File.write(plugins_file, JSON.generate(plugins))
+    yield
+  ensure
+    File.write(plugins_file, original_plugins)
+  end
+end
+
+target 'Runner' do
+  use_frameworks!
+
+  with_patched_flutter_webrtc_macos do
+    flutter_install_all_macos_pods File.dirname(File.realpath(__FILE__))
+  end
+  target 'RunnerTests' do
+    inherit! :search_paths
+  end
+end
+
+post_install do |installer|
+  installer.pods_project.targets.each do |target|
+    flutter_additional_macos_build_settings(target)
+  end
+end

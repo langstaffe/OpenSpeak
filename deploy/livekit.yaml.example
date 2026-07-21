@@ -1,0 +1,17 @@
+# LiveKit config bundled for a single-machine OpenSpeak install.
+# For production web clients, put LiveKit behind a real domain and TLS/WSS.
+
+port: 27420
+bind_addresses:
+  - "0.0.0.0"
+
+rtc:
+  tcp_port: 27421
+  udp_port: 27422
+  # Keep automatic discovery off for predictable deployments. On cloud servers,
+  # explicitly advertise the public IP so clients receive reachable ICE candidates.
+  use_external_ip: false
+  # node_ip: YOUR_SERVER_IP
+
+keys:
+  CHANGE_ME_LIVEKIT_API_KEY: CHANGE_ME_LIVEKIT_API_SECRET
