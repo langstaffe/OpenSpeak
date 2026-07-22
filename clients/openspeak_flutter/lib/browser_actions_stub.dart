@@ -1,5 +1,7 @@
 import 'dart:typed_data';
 
+bool browserSupportsWebRtc() => true;
+
 void downloadBrowserBytes(Uint8List bytes, String name, String contentType) {
   throw UnsupportedError('Browser downloads are unavailable');
 }

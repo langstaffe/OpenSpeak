@@ -12,6 +12,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart' as rtc;
 import 'package:http/http.dart' as http;
 import 'package:livekit_client/livekit_client.dart' as lk;
+import 'package:openspeak_flutter/browser_actions.dart';
 import 'package:openspeak_flutter/client_log.dart';
 import 'package:openspeak_flutter/device_identity_service.dart';
 import 'package:openspeak_flutter/main.dart';
@@ -21,6 +22,10 @@ import 'package:openspeak_flutter/sound_effects.dart';
 import 'package:openspeak_flutter/voice_session_controller.dart';
 
 void main() {
+  test('browser WebRTC probe accepts a supported environment', () {
+    expect(browserSupportsWebRtc(), isTrue);
+  });
+
   testWidgets('all sound effects are bundled as WAV files', (_) async {
     for (final effect in SoundEffect.values) {
       final bytes = await rootBundle.load('assets/${effect.asset}');

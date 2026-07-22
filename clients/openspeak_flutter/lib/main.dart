@@ -1319,6 +1319,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   bool voiceReconnectPending = false;
   bool voiceDisconnectSoundPlayed = false;
   bool audioDeviceErrorActive = false;
+  bool webRtcWarningShown = false;
 
   @override
   void initState() {
@@ -1682,6 +1683,29 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     }
   }
 
+  Future<void> showWebRtcWarningIfNeeded() async {
+    if (!kIsWeb || webRtcWarningShown || browserSupportsWebRtc()) return;
+    webRtcWarningShown = true;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: OsColors.content,
+        title: const Text('浏览器不支持 WebRTC'),
+        content: const Text(
+          '当前浏览器未启用或不支持 WebRTC，语音和屏幕共享将无法使用。'
+          '请启用 WebRTC，或更换支持 WebRTC 的浏览器后刷新页面。',
+        ),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> login() async {
     final generation = ++connectionGeneration;
     channelJoinQueue.invalidate();
@@ -1788,6 +1812,8 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         activity.clear();
         wsConnected = false;
       });
+      await showWebRtcWarningIfNeeded();
+      if (!isActiveConnectionGeneration(generation)) return;
       voiceSession.startServerLatencyMonitor(nextApi);
       if (nextServers.isNotEmpty) {
         await updateSelectedConnectionServerMetadata(nextServers.first);
