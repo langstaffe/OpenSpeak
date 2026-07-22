@@ -1,12 +1,11 @@
-// LiveKit 2.8.1 installs its join/peer waiters after opening the WebSocket and
-// also waits for a peer that a manual subscriber creates only after connect.
-// Web needs the same flow with early waiters and support for that lazy peer.
+// LiveKit 2.8.1 waits for a peer that OpenSpeak's manual Web subscriber creates
+// only after connect. Treat the signaling join as the Web connection boundary;
+// later publish/subscribe operations still negotiate and validate their peers.
 // ignore_for_file: implementation_imports, invalid_use_of_internal_member
 
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter_webrtc/flutter_webrtc.dart' as rtc;
 import 'package:livekit_client/livekit_client.dart' as lk;
 import 'package:livekit_client/src/core/engine.dart' as livekit_internal;
 import 'package:livekit_client/src/internal/events.dart' as livekit_internal;
@@ -48,20 +47,10 @@ class WebJoinSafeEngine extends livekit_internal.Engine {
     this.fastConnectOptions = fastConnectOptions;
     if (regionUrlProvider != null) setRegionUrlProvider(regionUrlProvider);
 
-    final joinResponse = Completer<livekit_internal.EngineJoinResponseEvent>();
-    final primaryPeerConnected = Completer<void>();
+    final joinResponse = Completer<void>();
     final cancelJoinResponse = events
-        .on<livekit_internal.EngineJoinResponseEvent>((event) {
-          if (!joinResponse.isCompleted) joinResponse.complete(event);
-        });
-    final cancelPrimaryPeer = events
-        .on<livekit_internal.EnginePeerStateUpdatedEvent>((event) {
-          if (event.isPrimary &&
-              event.state ==
-                  rtc.RTCPeerConnectionState.RTCPeerConnectionStateConnected &&
-              !primaryPeerConnected.isCompleted) {
-            primaryPeerConnected.complete();
-          }
+        .on<livekit_internal.EngineJoinResponseEvent>((_) {
+          if (!joinResponse.isCompleted) joinResponse.complete();
         });
     try {
       await signalClient.connect(
@@ -70,26 +59,13 @@ class WebJoinSafeEngine extends livekit_internal.Engine {
         connectOptions: this.connectOptions,
         roomOptions: this.roomOptions,
       );
-      final joined = await joinResponse.future.timeout(
+      await joinResponse.future.timeout(
         this.connectOptions.timeouts.connection,
         onTimeout: () => throw lk.ConnectException(
           'Timed out waiting for SignalJoinResponseEvent',
           reason: lk.ConnectionErrorReason.Timeout,
         ),
       );
-      final lazySubscriber =
-          joined.response.subscriberPrimary &&
-          !joined.response.fastPublish &&
-          !this.connectOptions.autoSubscribe;
-      if (!lazySubscriber) {
-        await primaryPeerConnected.future.timeout(
-          this.connectOptions.timeouts.connection,
-          onTimeout: () => throw lk.MediaConnectException(
-            'Timed out waiting for PeerConnection to connect, '
-            'please check your network for ice connectivity',
-          ),
-        );
-      }
       events.emit(const livekit_internal.EngineConnectedEvent());
     } catch (error) {
       lk.logger.fine('Connect Error $error');
@@ -101,7 +77,6 @@ class WebJoinSafeEngine extends livekit_internal.Engine {
       rethrow;
     } finally {
       await cancelJoinResponse();
-      await cancelPrimaryPeer();
     }
   }
 }

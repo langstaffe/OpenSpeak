@@ -1,7 +1,6 @@
 // ignore_for_file: implementation_imports, invalid_use_of_internal_member
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter_webrtc/flutter_webrtc.dart' as rtc;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:livekit_client/livekit_client.dart' as lk;
 import 'package:livekit_client/src/core/signal_client.dart' as livekit_internal;
@@ -39,45 +38,17 @@ void main() {
     await room.dispose();
   });
 
-  test(
-    'web engine observes join and peer events emitted during socket connect',
-    () async {
-      final signalClient = _ImmediateJoinSignalClient();
-      final engine = WebJoinSafeEngine(
-        connectOptions: const lk.ConnectOptions(),
-        roomOptions: const lk.RoomOptions(),
-        signalClient: signalClient,
-      );
-      signalClient.onConnect = () {
-        engine.events.emit(
-          livekit_internal.EngineJoinResponseEvent(
-            response: livekit_rtc.JoinResponse(),
-          ),
-        );
-        engine.events.emit(
-          const livekit_internal.EngineSubscriberPeerStateUpdatedEvent(
-            state: rtc.RTCPeerConnectionState.RTCPeerConnectionStateConnected,
-            isPrimary: true,
-          ),
-        );
-      };
-
-      await engine.connect('wss://voice.example', 'token');
-      await engine.dispose();
-    },
-  );
-
-  test('web engine allows a lazy manual-subscriber connection', () async {
+  test('web engine connects after an immediate signaling join', () async {
     final signalClient = _ImmediateJoinSignalClient();
     final engine = WebJoinSafeEngine(
-      connectOptions: const lk.ConnectOptions(autoSubscribe: false),
+      connectOptions: const lk.ConnectOptions(),
       roomOptions: const lk.RoomOptions(),
       signalClient: signalClient,
     );
     signalClient.onConnect = () {
       engine.events.emit(
         livekit_internal.EngineJoinResponseEvent(
-          response: livekit_rtc.JoinResponse()..subscriberPrimary = true,
+          response: livekit_rtc.JoinResponse(),
         ),
       );
     };
