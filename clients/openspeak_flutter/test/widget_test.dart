@@ -3994,6 +3994,10 @@ void main() {
       var joins = 0;
       await tester.pumpWidget(
         MaterialApp(
+          theme: ThemeData(
+            useMaterial3: false,
+            splashFactory: InkRipple.splashFactory,
+          ),
           home: Scaffold(
             body: ChannelTile(
               channel: Channel(id: 'channel', name: '频道', sortOrder: 0),
@@ -4018,8 +4022,12 @@ void main() {
 
       final channel = find.text('频道');
       await tester.tap(channel);
+      await tester.pump();
+      final material = Material.of(tester.element(channel));
+      expect(material, paintsExactlyCountTimes(#drawCircle, 1));
       expect(selections, 1);
       expect(joins, 0);
+      await tester.pumpAndSettle();
 
       await tester.tap(channel);
       await tester.pump(const Duration(milliseconds: 50));
@@ -4027,6 +4035,39 @@ void main() {
       await tester.pump(const Duration(milliseconds: 400));
       expect(selections, 3);
       expect(joins, 1);
+      await tester.pumpAndSettle();
+
+      final drag = await tester.startGesture(tester.getCenter(channel));
+      await drag.moveBy(const Offset(50, 0));
+      await drag.up();
+      await tester.tap(channel);
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(selections, 5);
+      expect(joins, 1);
+      await tester.pumpAndSettle();
+
+      await tester.tap(channel);
+      await tester.pump(const Duration(milliseconds: 50));
+      final heldSecondTap = await tester.startGesture(
+        tester.getCenter(channel),
+      );
+      await tester.pump(const Duration(milliseconds: 400));
+      await heldSecondTap.up();
+      await tester.pump();
+      expect(selections, 7);
+      expect(joins, 2);
+      await tester.pumpAndSettle();
+
+      await tester.tap(channel);
+      final tooFastSecondTap = await tester.startGesture(
+        tester.getCenter(channel),
+      );
+      await tester.pump(const Duration(milliseconds: 50));
+      await tooFastSecondTap.up();
+      await tester.pump();
+      expect(selections, 9);
+      expect(joins, 2);
+      await tester.pumpAndSettle();
     },
   );
 

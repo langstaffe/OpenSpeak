@@ -18618,6 +18618,106 @@ class _VerticalVolumeSliderPainter extends CustomPainter {
   }
 }
 
+class _ImmediateChannelInkWell extends StatefulWidget {
+  const _ImmediateChannelInkWell({
+    required this.onTap,
+    required this.onDoubleTap,
+    required this.onSecondaryTapDown,
+    required this.child,
+  });
+
+  final VoidCallback onTap;
+  final VoidCallback onDoubleTap;
+  final GestureTapDownCallback onSecondaryTapDown;
+  final Widget child;
+
+  @override
+  State<_ImmediateChannelInkWell> createState() =>
+      _ImmediateChannelInkWellState();
+}
+
+class _ImmediateChannelInkWellState extends State<_ImmediateChannelInkWell> {
+  Offset? currentPrimaryDownPosition;
+  bool currentDoubleTapCandidate = false;
+  Offset? lastPrimaryDownPosition;
+  bool tapSeriesMinTimeElapsed = false;
+  Timer? tapSeriesMinTimer;
+  Timer? tapSeriesTimer;
+
+  void handlePointerDown(PointerDownEvent event) {
+    if (event.buttons != kPrimaryButton) return;
+    widget.onTap();
+    currentPrimaryDownPosition = event.position;
+    currentDoubleTapCandidate = isDoubleTapCandidate(event.position);
+    if (currentDoubleTapCandidate) {
+      tapSeriesTimer?.cancel();
+      tapSeriesTimer = null;
+    }
+  }
+
+  bool isDoubleTapCandidate(Offset position) =>
+      lastPrimaryDownPosition != null &&
+      tapSeriesMinTimeElapsed &&
+      (position - lastPrimaryDownPosition!).distance <= kDoubleTapSlop;
+
+  void handleTap() {
+    final currentPosition = currentPrimaryDownPosition;
+    if (currentPosition == null) return;
+    final doubleTap = currentDoubleTapCandidate;
+    currentPrimaryDownPosition = null;
+    currentDoubleTapCandidate = false;
+    clearTapSeries();
+    if (doubleTap) {
+      widget.onDoubleTap();
+    } else {
+      lastPrimaryDownPosition = currentPosition;
+      tapSeriesMinTimer = Timer(
+        kDoubleTapMinTime,
+        () => tapSeriesMinTimeElapsed = true,
+      );
+      tapSeriesTimer = Timer(kDoubleTapTimeout, clearTapSeries);
+    }
+  }
+
+  void handleTapCancel() {
+    currentPrimaryDownPosition = null;
+    currentDoubleTapCandidate = false;
+    clearTapSeries();
+  }
+
+  void clearTapSeries() {
+    tapSeriesMinTimer?.cancel();
+    tapSeriesMinTimer = null;
+    tapSeriesTimer?.cancel();
+    tapSeriesTimer = null;
+    tapSeriesMinTimeElapsed = false;
+    lastPrimaryDownPosition = null;
+  }
+
+  @override
+  void dispose() {
+    clearTapSeries();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Semantics(
+    button: true,
+    onTap: widget.onTap,
+    child: Listener(
+      onPointerDown: handlePointerDown,
+      child: InkWell(
+        excludeFromSemantics: true,
+        enableFeedback: false,
+        onTap: handleTap,
+        onTapCancel: handleTapCancel,
+        onSecondaryTapDown: widget.onSecondaryTapDown,
+        child: widget.child,
+      ),
+    ),
+  );
+}
+
 class ChannelTile extends StatelessWidget {
   const ChannelTile({
     super.key,
@@ -18676,85 +18776,81 @@ class ChannelTile extends StatelessWidget {
             color: selected ? OsColors.rowSelected : OsColors.rowHover,
             borderRadius: BorderRadius.circular(4),
             clipBehavior: Clip.antiAlias,
-            child: Listener(
-              onPointerDown: (event) {
-                if (event.buttons == kPrimaryButton) onTap();
-              },
-              child: InkWell(
-                onDoubleTap: onDoubleTap,
-                onSecondaryTapDown: onSecondaryTapDown,
-                child: SizedBox(
-                  height: 38,
-                  child: Stack(
-                    children: [
-                      if (hasUnread)
-                        const Positioned(
-                          left: 0,
-                          top: 6,
-                          bottom: 6,
-                          child: ColoredBox(
-                            color: OsColors.blurple,
-                            child: SizedBox(width: 3),
-                          ),
-                        ),
-                      ListTile(
-                        dense: true,
-                        contentPadding: EdgeInsets.only(
-                          left: 16,
-                          right: reorderIndex != null
-                              ? (hasUnread ? 68 : 42)
-                              : (hasUnread ? 44 : 16),
-                        ),
-                        minLeadingWidth: 16,
-                        leading: Icon(
-                          Icons.tag,
-                          size: 17,
-                          color: hasUnread ? OsColors.text : OsColors.dim,
-                        ),
-                        title: Text(
-                          channel.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: selected || hasUnread
-                                ? OsColors.text
-                                : OsColors.muted,
-                            fontWeight: selected || hasUnread
-                                ? FontWeight.w700
-                                : FontWeight.w500,
-                          ),
+            child: _ImmediateChannelInkWell(
+              onTap: onTap,
+              onDoubleTap: onDoubleTap,
+              onSecondaryTapDown: onSecondaryTapDown,
+              child: SizedBox(
+                height: 38,
+                child: Stack(
+                  children: [
+                    if (hasUnread)
+                      const Positioned(
+                        left: 0,
+                        top: 6,
+                        bottom: 6,
+                        child: ColoredBox(
+                          color: OsColors.blurple,
+                          child: SizedBox(width: 3),
                         ),
                       ),
-                      if (hasUnread)
-                        Positioned(
-                          right: reorderIndex == null ? 8 : 34,
-                          top: 5,
-                          child: UnreadBadge(
-                            count: unreadBadgeCount,
-                            compact: true,
-                          ),
+                    ListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.only(
+                        left: 16,
+                        right: reorderIndex != null
+                            ? (hasUnread ? 68 : 42)
+                            : (hasUnread ? 44 : 16),
+                      ),
+                      minLeadingWidth: 16,
+                      leading: Icon(
+                        Icons.tag,
+                        size: 17,
+                        color: hasUnread ? OsColors.text : OsColors.dim,
+                      ),
+                      title: Text(
+                        channel.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: selected || hasUnread
+                              ? OsColors.text
+                              : OsColors.muted,
+                          fontWeight: selected || hasUnread
+                              ? FontWeight.w700
+                              : FontWeight.w500,
                         ),
-                      if (reorderIndex != null)
-                        Positioned(
-                          right: 6,
-                          top: 0,
-                          bottom: 0,
-                          child: Center(
-                            child: ReorderableDragStartListener(
-                              index: reorderIndex!,
-                              child: const MouseRegion(
-                                cursor: SystemMouseCursors.grab,
-                                child: Icon(
-                                  Icons.drag_indicator_rounded,
-                                  size: 20,
-                                  color: OsColors.dim,
-                                ),
+                      ),
+                    ),
+                    if (hasUnread)
+                      Positioned(
+                        right: reorderIndex == null ? 8 : 34,
+                        top: 5,
+                        child: UnreadBadge(
+                          count: unreadBadgeCount,
+                          compact: true,
+                        ),
+                      ),
+                    if (reorderIndex != null)
+                      Positioned(
+                        right: 6,
+                        top: 0,
+                        bottom: 0,
+                        child: Center(
+                          child: ReorderableDragStartListener(
+                            index: reorderIndex!,
+                            child: const MouseRegion(
+                              cursor: SystemMouseCursors.grab,
+                              child: Icon(
+                                Icons.drag_indicator_rounded,
+                                size: 20,
+                                color: OsColors.dim,
                               ),
                             ),
                           ),
                         ),
-                    ],
-                  ),
+                      ),
+                  ],
                 ),
               ),
             ),
