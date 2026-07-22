@@ -76,6 +76,11 @@ String initialServerUrl() {
   ).toString().replaceFirst(RegExp(r'/$'), '');
 }
 
+bool webLoginNeedsPasswordPrompt(Object error, {required bool isWeb}) =>
+    isWeb &&
+    error is OpenSpeakException &&
+    error.code == 'invalid_server_password';
+
 const savedConnectionsKey = 'openspeak.savedConnections.v1';
 const localProfileDisplayNameKey = 'openspeak.localProfileDisplayName.v1';
 const localProfileAvatarPendingSyncKey =
@@ -1353,8 +1358,14 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         activeAudioProxyId = null;
       });
     });
-    unawaited(loadSavedConnections());
-    unawaited(loadLocalProfile());
+    if (kIsWeb) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(login());
+      });
+    } else {
+      unawaited(loadSavedConnections());
+      unawaited(loadLocalProfile());
+    }
     unawaited(loadAudioDevicePreferences());
     unawaited(loadMemberOutputVolumes());
     unawaited(audioDeviceMonitor.start());
@@ -1563,6 +1574,114 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     return created;
   }
 
+  Future<AuthSession> loginSession(
+    OpenSpeakApi client,
+    String displayName,
+    String installationId,
+  ) async {
+    try {
+      return await client.login(
+        displayName,
+        passwordController.text,
+        clientInstallationId: installationId,
+      );
+    } catch (exception) {
+      if (!webLoginNeedsPasswordPrompt(exception, isWeb: kIsWeb)) rethrow;
+      return showWebPasswordDialog(client, displayName, installationId);
+    }
+  }
+
+  Future<AuthSession> showWebPasswordDialog(
+    OpenSpeakApi client,
+    String displayName,
+    String installationId,
+  ) async {
+    final controller = TextEditingController();
+    try {
+      final result = await showDialog<AuthSession>(
+        context: context,
+        barrierDismissible: false,
+        barrierColor: OsColors.rail,
+        builder: (dialogContext) {
+          var submitting = false;
+          String? passwordError;
+          return StatefulBuilder(
+            builder: (context, setDialogState) {
+              Future<void> submit() async {
+                if (submitting) return;
+                if (controller.text.isEmpty) {
+                  setDialogState(() => passwordError = '请输入服务器密码');
+                  return;
+                }
+                setDialogState(() {
+                  submitting = true;
+                  passwordError = null;
+                });
+                try {
+                  final session = await client.login(
+                    displayName,
+                    controller.text,
+                    clientInstallationId: installationId,
+                  );
+                  passwordController.text = controller.text;
+                  if (dialogContext.mounted) {
+                    Navigator.of(dialogContext).pop(session);
+                  }
+                } catch (exception) {
+                  if (!dialogContext.mounted) return;
+                  setDialogState(() {
+                    submitting = false;
+                    passwordError =
+                        webLoginNeedsPasswordPrompt(exception, isWeb: true)
+                        ? '服务器密码错误'
+                        : exception.toString();
+                  });
+                }
+              }
+
+              return PopScope(
+                canPop: false,
+                child: AlertDialog(
+                  backgroundColor: OsColors.content,
+                  title: const Text('连接 OpenSpeak'),
+                  content: SizedBox(
+                    width: 390,
+                    child: TextField(
+                      controller: controller,
+                      autofocus: true,
+                      obscureText: true,
+                      enabled: !submitting,
+                      decoration: InputDecoration(
+                        labelText: '服务器密码',
+                        errorText: passwordError,
+                      ),
+                      onSubmitted: (_) => unawaited(submit()),
+                    ),
+                  ),
+                  actions: [
+                    FilledButton(
+                      onPressed: submitting ? null : () => unawaited(submit()),
+                      child: submitting
+                          ? const SizedBox.square(
+                              dimension: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Text('连接'),
+                    ),
+                  ],
+                ),
+              );
+            },
+          );
+        },
+      );
+      if (result == null) throw OpenSpeakException('连接已取消');
+      return result;
+    } finally {
+      controller.dispose();
+    }
+  }
+
   Future<void> login() async {
     final generation = ++connectionGeneration;
     channelJoinQueue.invalidate();
@@ -1583,11 +1702,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
           : localDisplayName.trim();
       late AuthSession nextSession;
       try {
-        nextSession = await nextApi.login(
-          displayName,
-          passwordController.text,
-          clientInstallationId: installationId,
-        );
+        nextSession = await loginSession(nextApi, displayName, installationId);
       } on OpenSpeakException catch (exception) {
         final canonicalBase = canonicalServerBaseUri(nextApi.baseUri, {
           'error': exception.code,
@@ -1600,11 +1715,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         await persistSelectedConnectionUrl(canonicalUrl);
         if (!isActiveConnectionGeneration(generation)) return;
         nextApi = OpenSpeakApi(canonicalUrl);
-        nextSession = await nextApi.login(
-          displayName,
-          passwordController.text,
-          clientInstallationId: installationId,
-        );
+        nextSession = await loginSession(nextApi, displayName, installationId);
       }
       var nextServers = await nextApi.listServers(nextSession.token);
       final loginUserId = nextSession.user.id;
@@ -2098,10 +2209,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   }
 
   Future<void> showAddServerDialog() async {
-    if (kIsWeb) {
-      await showWebConnectDialog();
-      return;
-    }
+    if (kIsWeb) return;
     final addressController = TextEditingController();
     final portController = TextEditingController();
     final passwordController = TextEditingController(
@@ -2124,73 +2232,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       addressController.dispose();
       portController.dispose();
       passwordController.dispose();
-    }
-  }
-
-  Future<void> showWebConnectDialog() async {
-    final nameController = TextEditingController(text: localDisplayName);
-    final password = TextEditingController(text: passwordController.text);
-    try {
-      final connect = await showDialog<bool>(
-        context: context,
-        barrierColor: const Color(0xB8000000),
-        builder: (dialogContext) => AlertDialog(
-          backgroundColor: OsColors.content,
-          title: const Text('连接 OpenSpeak'),
-          content: SizedBox(
-            width: 390,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: nameController,
-                  autofocus: true,
-                  decoration: const InputDecoration(labelText: '显示名称'),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: password,
-                  obscureText: true,
-                  decoration: const InputDecoration(labelText: '服务器密码（如有）'),
-                  onSubmitted: (_) => Navigator.pop(dialogContext, true),
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
-              child: const Text('连接'),
-            ),
-          ],
-        ),
-      );
-      if (connect != true) return;
-      final displayName = nameController.text.trim();
-      if (displayName.isEmpty) {
-        if (mounted) setState(() => error = '显示名称不能为空');
-        return;
-      }
-      localDisplayName = displayName;
-      passwordController.text = password.text;
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(localProfileDisplayNameKey, displayName);
-      final url = initialServerUrl();
-      await addSavedConnection(
-        SavedServerConnection(
-          id: url.toLowerCase(),
-          name: Uri.base.host,
-          url: url,
-          password: password.text,
-        ),
-      );
-    } finally {
-      nameController.dispose();
-      password.dispose();
     }
   }
 
@@ -8771,13 +8812,38 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         body: Center(child: Text('OpenSpeak 网页端暂不支持小尺寸窗口，请使用桌面浏览器并放大窗口。')),
       );
     }
+    if (kIsWeb && session == null) {
+      return Scaffold(
+        backgroundColor: OsColors.rail,
+        body: Center(
+          child: loading
+              ? const CircularProgressIndicator()
+              : error == null
+              ? const SizedBox.shrink()
+              : Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 520),
+                      child: Text(error!, textAlign: TextAlign.center),
+                    ),
+                    const SizedBox(height: 16),
+                    FilledButton(
+                      onPressed: () => unawaited(login()),
+                      child: const Text('重新连接'),
+                    ),
+                  ],
+                ),
+        ),
+      );
+    }
     return Scaffold(body: buildShell());
   }
 
   Widget buildShell() {
     return Row(
       children: [
-        buildServerRail(),
+        if (!kIsWeb) buildServerRail(),
         buildChannelPane(),
         Expanded(child: buildMainPane()),
       ],

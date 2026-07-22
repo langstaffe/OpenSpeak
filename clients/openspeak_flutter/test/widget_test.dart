@@ -379,6 +379,21 @@ void main() {
     );
   });
 
+  test('only web login prompts for an invalid server password', () {
+    final invalidPassword = OpenSpeakException(
+      'invalid password',
+      statusCode: HttpStatus.unauthorized,
+      code: 'invalid_server_password',
+    );
+
+    expect(webLoginNeedsPasswordPrompt(invalidPassword, isWeb: true), isTrue);
+    expect(webLoginNeedsPasswordPrompt(invalidPassword, isWeb: false), isFalse);
+    expect(
+      webLoginNeedsPasswordPrompt(OpenSpeakException('offline'), isWeb: true),
+      isFalse,
+    );
+  });
+
   test('API connect retry is limited to the first socket failure', () {
     final error = const SocketException('timed out');
 
