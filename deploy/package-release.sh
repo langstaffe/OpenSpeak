@@ -60,6 +60,10 @@ if [[ ! -f "${WEB_ROOT}/index.html" ]]; then
   echo "missing Flutter Web build: ${WEB_ROOT}/index.html; run 'cd clients/openspeak_flutter && flutter build web --release' first" >&2
   exit 1
 fi
+if [[ ! -f "${WEB_ROOT}/e2ee.worker.dart.js" ]]; then
+  echo "missing Flutter Web E2EE worker: ${WEB_ROOT}/e2ee.worker.dart.js; rebuild the Flutter Web client" >&2
+  exit 1
+fi
 
 if [[ -z "${CADDY_BIN}" ]] && command -v caddy >/dev/null 2>&1; then
   CADDY_BIN="$(command -v caddy)"

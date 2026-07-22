@@ -1540,7 +1540,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     if (next.inputDeviceId == selectedAudioInputDeviceId &&
         next.outputDeviceId == selectedAudioOutputDeviceId) {
       setState(() {});
-      if (restartDefaultInput) {
+      if (restartDefaultInput || (kIsWeb && !inputAvailable)) {
         unawaited(
           setAudioDevices(
             next.inputDeviceId,
@@ -2017,13 +2017,24 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         microphonePushToTalkHotkey = null;
       }
     }
-    selectedAudioInputDeviceId = input?.trim().isEmpty == true ? null : input;
-    selectedAudioOutputDeviceId = output?.trim().isEmpty == true
-        ? null
-        : output;
+    final savedInput = input?.trim().isEmpty == true ? null : input;
+    final savedOutput = output?.trim().isEmpty == true ? null : output;
+    final selection = audioDeviceMonitor.hasLoaded
+        ? audioDeviceSelectionAfterRefresh(
+            inputDeviceId: savedInput,
+            outputDeviceId: savedOutput,
+            devices: audioDeviceMonitor.devices,
+          )
+        : (inputDeviceId: savedInput, outputDeviceId: savedOutput);
+    selectedAudioInputDeviceId = selection.inputDeviceId;
+    selectedAudioOutputDeviceId = selection.outputDeviceId;
     await voiceSession.configureAudioDevices(
       inputDeviceId: selectedAudioInputDeviceId,
       outputDeviceId: selectedAudioOutputDeviceId,
+      inputAvailable: !audioDeviceKindUnavailable(
+        audioDeviceMonitor,
+        'audioinput',
+      ),
     );
     await voiceSession.setNoiseSuppressionEnabled(noiseSuppressionEnabled);
     await voiceSession.configureMicrophoneActivation(
@@ -8930,10 +8941,9 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
           screenShareMediaNodeId: state.screenShareMediaNodeId,
         ),
     };
-    final microphoneUnavailable = audioDeviceKindUnavailable(
-      audioDeviceMonitor,
-      'audioinput',
-    );
+    final microphoneUnavailable =
+        audioDeviceKindUnavailable(audioDeviceMonitor, 'audioinput') ||
+        voiceSession.microphoneUnavailable;
     final speakerUnavailable = audioDeviceKindUnavailable(
       audioDeviceMonitor,
       'audiooutput',
@@ -9037,7 +9047,9 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
               avatarToken: kIsWeb ? session?.token : null,
               online: wsConnected,
               muted: voiceSession.snapshot.muted,
-              canSpeak: hasServerPermission('voice.speak'),
+              canSpeak:
+                  hasServerPermission('voice.speak') &&
+                  (!kIsWeb || !microphoneUnavailable),
               canShareScreen:
                   hasServerPermission('voice.screen_share') &&
                   voiceSession.snapshot.connected &&

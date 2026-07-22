@@ -541,6 +541,17 @@ bool voiceShouldAutoSubscribe({
   bool persistentRoom = false,
 }) => !listenOff && !e2eeRequired && !persistentRoom;
 
+bool webMicrophoneCaptureCanFallBackToListenOnly(
+  Object error, {
+  required bool isWeb,
+}) => isWeb && error.toString().contains('NotFoundError');
+
+bool voiceShouldKeepMicrophoneTrack({
+  required bool canPublish,
+  required bool listenOff,
+  required bool microphoneUnavailable,
+}) => canPublish && !listenOff && !microphoneUnavailable;
+
 bool voiceParticipantInCurrentChannel({
   required bool persistentRoom,
   required Set<String> channelMemberUserIds,
@@ -756,6 +767,7 @@ class VoiceSessionController extends ChangeNotifier {
   Timer? _e2eeOldKeyRetireTimer;
   String? _audioInputDeviceId;
   String? _audioOutputDeviceId;
+  bool _webMicrophoneUnavailable = false;
   bool _noiseSuppressionEnabled = true;
   MicrophoneActivationMode _microphoneActivationMode =
       MicrophoneActivationMode.continuous;
@@ -815,6 +827,7 @@ class VoiceSessionController extends ChangeNotifier {
   bool isJoinRequestCurrent(int request) => _isActiveSessionGeneration(request);
 
   bool get needsVoiceMicrophoneCapture => _microphoneCaptureTrack != null;
+  bool get microphoneUnavailable => _webMicrophoneUnavailable;
 
   bool get usesPersistentRoom =>
       snapshot.voiceToken?.roomScope == 'server' && _room != null;
@@ -1587,7 +1600,22 @@ class VoiceSessionController extends ChangeNotifier {
       _connectingRoom = room;
       try {
         _attachRoomListener(room);
-        final fastConnectTrack = await _ensureMicrophoneCapture(room);
+        lk.LocalAudioTrack? fastConnectTrack;
+        if (_webMicrophoneUnavailable) {
+          _enableWebListenOnlyMode();
+        } else if (_shouldKeepMicrophoneTrack()) {
+          try {
+            fastConnectTrack = await _ensureMicrophoneCapture(room);
+          } catch (error) {
+            if (!webMicrophoneCaptureCanFallBackToListenOnly(
+              error,
+              isWeb: kIsWeb,
+            )) {
+              rethrow;
+            }
+            _enableWebListenOnlyMode();
+          }
+        }
         if (!_isActiveSessionGeneration(generation) ||
             !identical(_room, room)) {
           await _disposeSpecificRoom(room);
@@ -1863,7 +1891,7 @@ class VoiceSessionController extends ChangeNotifier {
   }
 
   Future<void> setMuted(bool value) async {
-    final nextMuted = snapshot.listenOff && !value ? true : value;
+    final nextMuted = value || snapshot.listenOff || _webMicrophoneUnavailable;
     _setSnapshot(snapshot.copyWith(muted: nextMuted));
     await _applyMicrophonePublishing();
     if (nextMuted) {
@@ -1872,11 +1900,20 @@ class VoiceSessionController extends ChangeNotifier {
     await _syncVoiceState();
   }
 
+  void _enableWebListenOnlyMode() {
+    _webMicrophoneUnavailable = true;
+    _setSnapshot(snapshot.copyWith(muted: true, status: '未发现可用麦克风，正在以只听模式连接'));
+    ClientLog.write(
+      'voice.mic',
+      'capture unavailable; continuing in listen-only mode',
+    );
+  }
+
   Future<void> setListenOff(bool value) async {
     _setSnapshot(
       snapshot.copyWith(
         listenOff: value,
-        muted: value ? true : false,
+        muted: value || _webMicrophoneUnavailable,
         speaking: value ? false : snapshot.speaking,
       ),
     );
@@ -1894,6 +1931,12 @@ class VoiceSessionController extends ChangeNotifier {
     final inputChanged = _audioInputDeviceId != inputDeviceId;
     _audioInputDeviceId = inputDeviceId;
     _audioOutputDeviceId = outputDeviceId;
+    if (kIsWeb) {
+      _webMicrophoneUnavailable = !inputAvailable;
+      if (_webMicrophoneUnavailable && !snapshot.muted) {
+        _setSnapshot(snapshot.copyWith(muted: true));
+      }
+    }
     ClientLog.write(
       'voice.mic',
       'configure start input=${inputDeviceId ?? 'system'} '
@@ -1904,7 +1947,13 @@ class VoiceSessionController extends ChangeNotifier {
     try {
       await _applyAudioDevices();
       ClientLog.write('voice.mic', 'device route applied');
-      if (!inputAvailable) return;
+      if (!inputAvailable) {
+        if (kIsWeb) {
+          await _applyMicrophonePublishing();
+          await _syncVoiceState();
+        }
+        return;
+      }
       if (!inputChanged && !restartInput) return;
       if (microphoneCaptureRestartShouldDefer(
         roomConnecting: identical(_connectingRoom, _room),
@@ -3248,8 +3297,11 @@ class VoiceSessionController extends ChangeNotifier {
     _refreshScreenRoom();
   }
 
-  bool _shouldKeepMicrophoneTrack() =>
-      snapshot.voiceToken?.canPublish != false && !snapshot.listenOff;
+  bool _shouldKeepMicrophoneTrack() => voiceShouldKeepMicrophoneTrack(
+    canPublish: snapshot.voiceToken?.canPublish != false,
+    listenOff: snapshot.listenOff,
+    microphoneUnavailable: _webMicrophoneUnavailable,
+  );
 
   bool _shouldOpenMicrophoneGate() {
     return _shouldKeepMicrophoneTrack() &&

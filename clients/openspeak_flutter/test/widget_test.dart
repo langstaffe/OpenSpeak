@@ -561,6 +561,68 @@ void main() {
     );
   });
 
+  test(
+    'Web joins listen-only only when microphone capture finds no device',
+    () {
+      expect(
+        webMicrophoneCaptureCanFallBackToListenOnly(
+          'Unable to getUserMedia: NotFoundError: Requested device not found',
+          isWeb: true,
+        ),
+        isTrue,
+      );
+      expect(
+        webMicrophoneCaptureCanFallBackToListenOnly(
+          'Unable to getUserMedia: NotAllowedError: Permission denied',
+          isWeb: true,
+        ),
+        isFalse,
+      );
+      expect(
+        webMicrophoneCaptureCanFallBackToListenOnly(
+          'Unable to getUserMedia: NotFoundError: Requested device not found',
+          isWeb: false,
+        ),
+        isFalse,
+      );
+    },
+  );
+
+  test('listen-only mode does not keep a microphone track', () {
+    expect(
+      voiceShouldKeepMicrophoneTrack(
+        canPublish: true,
+        listenOff: false,
+        microphoneUnavailable: false,
+      ),
+      isTrue,
+    );
+    expect(
+      voiceShouldKeepMicrophoneTrack(
+        canPublish: true,
+        listenOff: false,
+        microphoneUnavailable: true,
+      ),
+      isFalse,
+    );
+    expect(
+      voiceShouldKeepMicrophoneTrack(
+        canPublish: false,
+        listenOff: false,
+        microphoneUnavailable: false,
+      ),
+      isFalse,
+    );
+    expect(
+      voiceShouldKeepMicrophoneTrack(
+        canPublish: true,
+        listenOff: true,
+        microphoneUnavailable: false,
+      ),
+      isFalse,
+    );
+  });
+
   test('persistent voice room routes only current channel participants', () {
     const members = {'local', 'same-channel'};
     expect(
