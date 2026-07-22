@@ -546,6 +546,10 @@ bool webMicrophoneCaptureCanFallBackToListenOnly(
   required bool isWeb,
 }) => isWeb && error.toString().contains('NotFoundError');
 
+bool webLiveKitJoinResponseCanRetry(Object error, {required bool isWeb}) =>
+    isWeb &&
+    error.toString().contains('Timed out waiting for SignalJoinResponseEvent');
+
 bool voiceShouldKeepMicrophoneTrack({
   required bool canPublish,
   required bool listenOff,
@@ -1097,6 +1101,7 @@ class VoiceSessionController extends ChangeNotifier {
   Future<lk.Room> _connectScreenRoom(
     ScreenShareToken token, {
     required String expectedPublisherUserId,
+    bool retryJoinResponseTimeout = true,
   }) async {
     await _disposeScreenRoom();
     final generation = ++_screenRoomGeneration;
@@ -1185,8 +1190,18 @@ class VoiceSessionController extends ChangeNotifier {
       _startScreenStatsPoll();
       if (!token.canPublish) unawaited(_pollScreenStats());
       return room;
-    } catch (_) {
+    } catch (error) {
       if (identical(_screenRoom, room)) await _disposeScreenRoom();
+      if (!_disposed &&
+          retryJoinResponseTimeout &&
+          webLiveKitJoinResponseCanRetry(error, isWeb: kIsWeb)) {
+        ClientLog.write('voice.screen', 'retrying missed join response');
+        return _connectScreenRoom(
+          token,
+          expectedPublisherUserId: expectedPublisherUserId,
+          retryJoinResponseTimeout: false,
+        );
+      }
       rethrow;
     }
   }
@@ -1716,7 +1731,12 @@ class VoiceSessionController extends ChangeNotifier {
         syncingVoiceState: syncingVoiceState,
         failedUrl: failedUrl,
       );
-      final preserveVoiceState = reconnectAttempt && !_intentionalLeave;
+      final retryJoinResponse = webLiveKitJoinResponseCanRetry(
+        error,
+        isWeb: kIsWeb,
+      );
+      final preserveVoiceState =
+          (reconnectAttempt || retryJoinResponse) && !_intentionalLeave;
       await _disposeRoom();
       _setSnapshot(
         snapshot.copyWith(
@@ -1736,8 +1756,12 @@ class VoiceSessionController extends ChangeNotifier {
         ),
       );
       if (preserveVoiceState) {
+        if (retryJoinResponse && !reconnectAttempt) {
+          ClientLog.write('voice.room', 'retrying missed join response');
+        }
         _scheduleLiveKitReconnect();
       }
+      if (retryJoinResponse && !reconnectAttempt) return;
       if (liveKitConnected) {
         throw OpenSpeakException(
           '$failureStatus: $error',

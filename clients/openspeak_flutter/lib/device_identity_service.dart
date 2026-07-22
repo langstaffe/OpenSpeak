@@ -33,6 +33,25 @@ const attachmentEncryptionFormatV1 = 'openspeak-attachment-v1';
 const attachmentEncryptionChunkSize = 64 * 1024;
 const attachmentEncryptionHeaderSize = 28;
 const _attachmentMagic = <int>[0x4f, 0x53, 0x41, 0x54, 0x54, 0x41, 0x43, 0x31];
+const _uint32Base = 0x100000000;
+const maxSafeAttachmentSize = 0x1fffffffffffff;
+
+void writeAttachmentSize(ByteData data, int offset, int value) {
+  if (value < 0 || value > maxSafeAttachmentSize) {
+    throw RangeError.range(value, 0, maxSafeAttachmentSize, 'value');
+  }
+  data
+    ..setUint32(offset, value ~/ _uint32Base, Endian.big)
+    ..setUint32(offset + 4, value.remainder(_uint32Base), Endian.big);
+}
+
+int readAttachmentSize(ByteData data, int offset) {
+  final high = data.getUint32(offset, Endian.big);
+  if (high > 0x1fffff) {
+    throw const FormatException('attachment size exceeds safe integer range');
+  }
+  return high * _uint32Base + data.getUint32(offset + 4, Endian.big);
+}
 
 class AttachmentEncryptionResult {
   AttachmentEncryptionResult({
@@ -305,9 +324,9 @@ class DeviceIdentityService {
     final noncePrefix = Uint8List.fromList(_randomBytes(8));
     final header = ByteData(attachmentEncryptionHeaderSize)
       ..buffer.asUint8List().setRange(0, 8, _attachmentMagic)
-      ..setUint32(8, attachmentEncryptionChunkSize, Endian.big)
-      ..setUint64(12, plaintextSize, Endian.big)
-      ..buffer.asUint8List().setRange(20, 28, noncePrefix);
+      ..setUint32(8, attachmentEncryptionChunkSize, Endian.big);
+    writeAttachmentSize(header, 12, plaintextSize);
+    header.buffer.asUint8List().setRange(20, 28, noncePrefix);
     await output.parent.create(recursive: true);
     final source = await input.open();
     final destination = await output.open(mode: FileMode.write);
@@ -361,9 +380,9 @@ class DeviceIdentityService {
     final noncePrefix = Uint8List.fromList(_randomBytes(8));
     final header = ByteData(attachmentEncryptionHeaderSize)
       ..buffer.asUint8List().setRange(0, 8, _attachmentMagic)
-      ..setUint32(8, attachmentEncryptionChunkSize, Endian.big)
-      ..setUint64(12, input.length, Endian.big)
-      ..buffer.asUint8List().setRange(20, 28, noncePrefix);
+      ..setUint32(8, attachmentEncryptionChunkSize, Endian.big);
+    writeAttachmentSize(header, 12, input.length);
+    header.buffer.asUint8List().setRange(20, 28, noncePrefix);
     final output = BytesBuilder(copy: false)..add(header.buffer.asUint8List());
     var processed = 0;
     var index = 0;
@@ -678,7 +697,7 @@ class DeviceIdentityService {
     final data = ByteData.sublistView(Uint8List.fromList(bytes));
     final header = _AttachmentHeader(
       chunkSize: data.getUint32(8, Endian.big),
-      plaintextSize: data.getUint64(12, Endian.big),
+      plaintextSize: readAttachmentSize(data, 12),
       noncePrefix: Uint8List.fromList(bytes.sublist(20, 28)),
     );
     if (header.chunkSize != attachmentEncryptionChunkSize ||

@@ -283,4 +283,26 @@ void main() {
       throwsA(anything),
     );
   });
+
+  test('attachment size keeps the existing 64-bit big-endian format', () {
+    final data = ByteData(8);
+    for (final value in <int>[
+      0,
+      0xffffffff,
+      0x100000000,
+      maxSafeAttachmentSize,
+    ]) {
+      writeAttachmentSize(data, 0, value);
+      expect(readAttachmentSize(data, 0), value);
+    }
+    writeAttachmentSize(data, 0, 0x100000001);
+    expect(data.getUint32(0, Endian.big), 1);
+    expect(data.getUint32(4, Endian.big), 1);
+    expect(
+      () => writeAttachmentSize(data, 0, maxSafeAttachmentSize + 1),
+      throwsRangeError,
+    );
+    data.setUint32(0, 0x200000, Endian.big);
+    expect(() => readAttachmentSize(data, 0), throwsA(isA<FormatException>()));
+  });
 }

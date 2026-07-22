@@ -935,6 +935,23 @@ void main() {
     expect(liveKitReconnectDelay(99), const Duration(seconds: 30));
   });
 
+  test('web retries only the missed LiveKit join response timeout', () {
+    const timeout =
+        'LiveKit Exception: Timed out waiting for SignalJoinResponseEvent';
+    expect(
+      webLiveKitJoinResponseCanRetry(Exception(timeout), isWeb: true),
+      isTrue,
+    );
+    expect(
+      webLiveKitJoinResponseCanRetry(Exception(timeout), isWeb: false),
+      isFalse,
+    );
+    expect(
+      webLiveKitJoinResponseCanRetry(Exception('Unauthorized'), isWeb: true),
+      isFalse,
+    );
+  });
+
   test('room events do not finalize an explicit voice join early', () {
     expect(voiceRoomEventShouldFinalizeSession(connecting: true), isFalse);
     expect(voiceRoomEventShouldFinalizeSession(connecting: false), isTrue);
