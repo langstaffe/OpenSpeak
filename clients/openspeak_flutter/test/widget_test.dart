@@ -1307,6 +1307,21 @@ void main() {
     );
   });
 
+  test('Web keeps its microphone sender attached while the gate is closed', () {
+    expect(
+      microphoneSenderShouldStayAttached(isWeb: true, shouldTransmit: false),
+      isTrue,
+    );
+    expect(
+      microphoneSenderShouldStayAttached(isWeb: false, shouldTransmit: false),
+      isFalse,
+    );
+    expect(
+      microphoneSenderShouldStayAttached(isWeb: false, shouldTransmit: true),
+      isTrue,
+    );
+  });
+
   test('microphone PCM monitoring uses only supported LiveKit platforms', () {
     expect(microphonePcmMonitorSupported(TargetPlatform.macOS), isTrue);
     expect(microphonePcmMonitorSupported(TargetPlatform.iOS), isTrue);

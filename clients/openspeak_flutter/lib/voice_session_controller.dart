@@ -406,6 +406,11 @@ bool microphoneSenderReplacementShouldRun({
   required bool alreadyAttached,
 }) => force || !alreadyAttached;
 
+bool microphoneSenderShouldStayAttached({
+  required bool isWeb,
+  required bool shouldTransmit,
+}) => isWeb || shouldTransmit;
+
 bool microphoneRmsIndicatesActivity(double rms) => rms >= _minimumVoiceAudioRms;
 
 bool voiceStateSyncShouldRetry(OpenSpeakException error) =>
@@ -838,6 +843,7 @@ class VoiceSessionController extends ChangeNotifier {
   Future<void> _mediaRoutingTail = Future<void>.value();
   int _microphoneRoutingRevision = 0;
   lk.LocalAudioTrack? _microphoneCaptureTrack;
+  rtc.MediaStreamTrack? _webMicrophoneSenderTrack;
   bool _microphoneCaptureRestartPending = false;
   lk.LocalAudioTrack? _microphoneMonitorTrack;
   bool? _windowsMonitorUsesWebRtc;
@@ -3462,9 +3468,14 @@ class VoiceSessionController extends ChangeNotifier {
         );
         try {
           if (publication?.track case final lk.LocalAudioTrack publishedTrack) {
-            if (!_shouldTransmitMicrophone(room)) {
-              await _replaceMicrophoneSenderTrack(publishedTrack, null);
-            }
+            final shouldTransmit = _shouldTransmitMicrophone(room);
+            await _replaceMicrophoneSenderTrack(
+              publishedTrack,
+              await _microphoneSenderTrack(
+                publishedTrack,
+                shouldTransmit: shouldTransmit,
+              ),
+            );
           }
         } finally {
           track.mediaStreamTrack.enabled = true;
@@ -3499,6 +3510,7 @@ class VoiceSessionController extends ChangeNotifier {
           await _replaceMicrophoneSenderTrack(publishedTrack, null);
         }
         await _releaseMicrophoneMonitor();
+        await _releaseWebMicrophoneSenderTrack();
         ClientLog.write('voice.mic', 'published capture restart start');
         await publishedTrack.restartTrack(_audioCaptureOptions);
         publishedTrack.mediaStreamTrack.onEnded = null;
@@ -3525,7 +3537,7 @@ class VoiceSessionController extends ChangeNotifier {
         }
         await _replaceMicrophoneSenderTrack(
           publishedTrack,
-          shouldTransmit ? track.mediaStreamTrack : null,
+          await _microphoneSenderTrack(track, shouldTransmit: shouldTransmit),
           force: forceSenderAttach && shouldTransmit,
         );
         forceSenderAttach = false;
@@ -3589,6 +3601,30 @@ class VoiceSessionController extends ChangeNotifier {
         roomConnected: room.connectionState == lk.ConnectionState.connected,
         roomConnecting: identical(_connectingRoom, room),
       );
+
+  Future<rtc.MediaStreamTrack?> _microphoneSenderTrack(
+    lk.LocalAudioTrack track, {
+    required bool shouldTransmit,
+  }) async {
+    if (!microphoneSenderShouldStayAttached(
+      isWeb: kIsWeb,
+      shouldTransmit: shouldTransmit,
+    )) {
+      return null;
+    }
+    if (!kIsWeb) return track.mediaStreamTrack;
+    var senderTrack = _webMicrophoneSenderTrack;
+    if (senderTrack == null) {
+      senderTrack = await track.mediaStreamTrack.clone();
+      if (!identical(_microphoneCaptureTrack, track)) {
+        await senderTrack.stop();
+        return null;
+      }
+      _webMicrophoneSenderTrack = senderTrack;
+    }
+    senderTrack.enabled = shouldTransmit;
+    return senderTrack;
+  }
 
   Future<void> _replaceMicrophoneSenderTrack(
     lk.LocalAudioTrack track,
@@ -3756,12 +3792,19 @@ class VoiceSessionController extends ChangeNotifier {
     final track = _microphoneCaptureTrack;
     _microphoneCaptureTrack = null;
     await _releaseMicrophoneMonitor();
+    await _releaseWebMicrophoneSenderTrack();
     track?.mediaStreamTrack.onEnded = null;
     if (track != null) {
       ClientLog.write('voice.mic', 'capture stop start');
       await track.stop();
       ClientLog.write('voice.mic', 'capture stop done');
     }
+  }
+
+  Future<void> _releaseWebMicrophoneSenderTrack() async {
+    final track = _webMicrophoneSenderTrack;
+    _webMicrophoneSenderTrack = null;
+    await track?.stop();
   }
 
   Future<void> _resetMicrophoneCapture() {
