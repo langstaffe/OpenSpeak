@@ -3624,6 +3624,39 @@ void main() {
     expect(partial.bitrateMbps('1080p', 60), 16);
   });
 
+  test('macOS screen sharing requires H264 without a VP8 fallback', () {
+    final encoding = screenShareVideoParameters(
+      const ScreenShareQuality('1080p', 60),
+    ).encoding;
+    final macOS = screenShareVideoPublishOptions(
+      encoding,
+      TargetPlatform.macOS,
+      isWeb: false,
+    );
+    final windows = screenShareVideoPublishOptions(
+      encoding,
+      TargetPlatform.windows,
+      isWeb: false,
+    );
+    final web = screenShareVideoPublishOptions(
+      encoding,
+      TargetPlatform.macOS,
+      isWeb: true,
+    );
+
+    expect(macOS.videoCodec, 'h264');
+    expect(macOS.backupVideoCodec.enabled, isFalse);
+    expect(
+      macOS.degradationPreference,
+      lk.DegradationPreference.maintainFramerate,
+    );
+    expect(macOS.screenShareEncoding, same(encoding));
+    expect(windows.videoCodec, 'vp8');
+    expect(windows.degradationPreference, isNull);
+    expect(web.videoCodec, 'vp8');
+    expect(web.degradationPreference, isNull);
+  });
+
   test('screen share diagnostics calculate native and web RTP bitrate', () {
     expect(
       rtpBitrateBitsPerSecond(

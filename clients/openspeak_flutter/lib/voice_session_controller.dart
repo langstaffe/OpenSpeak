@@ -130,6 +130,26 @@ lk.VideoParameters screenShareVideoParameters(
   );
 }
 
+lk.VideoPublishOptions screenShareVideoPublishOptions(
+  lk.VideoEncoding? encoding,
+  TargetPlatform platform, {
+  bool isWeb = kIsWeb,
+}) {
+  if (!isWeb && platform == TargetPlatform.macOS) {
+    return lk.VideoPublishOptions(
+      videoCodec: 'h264',
+      screenShareEncoding: encoding,
+      simulcast: false,
+      degradationPreference: lk.DegradationPreference.maintainFramerate,
+      backupVideoCodec: const lk.BackupVideoCodec(enabled: false),
+    );
+  }
+  return lk.VideoPublishOptions(
+    screenShareEncoding: encoding,
+    simulcast: false,
+  );
+}
+
 double? rtpBitrateBitsPerSecond({
   required num? bytes,
   required num? previousBytes,
@@ -1046,13 +1066,19 @@ class VoiceSessionController extends ChangeNotifier {
         : null;
     _screenShareQuality = quality;
     try {
+      final publishOptions = screenShareVideoPublishOptions(
+        parameters.encoding,
+        defaultTargetPlatform,
+      );
       final publication = await participant.publishVideoTrack(
         track,
-        publishOptions: lk.VideoPublishOptions(
-          screenShareEncoding: parameters.encoding,
-          simulcast: false,
-        ),
+        publishOptions: publishOptions,
       );
+      if (publishOptions.videoCodec == 'h264' &&
+          track.codec?.toLowerCase() != 'h264') {
+        await participant.removePublishedTrack(publication.sid);
+        throw OpenSpeakException('macOS 屏幕共享只允许使用硬件 H.264');
+      }
       if (!voiceTrackEncryptionAccepted(
         e2eeRequired: snapshot.voiceToken?.e2eeRequired == true,
         encryptionType: publication.encryptionType,
