@@ -98,3 +98,294 @@ diff --git a/macos/Classes/FlutterWebRTCPlugin.m b/macos/Classes/FlutterWebRTCPl
    self.peerConnections = [NSMutableDictionary new];
    self.localStreams = [NSMutableDictionary new];
    self.localTracks = [NSMutableDictionary new];
+diff --git a/macos/Classes/FlutterScreenCaptureKitCapturer.m b/macos/Classes/FlutterScreenCaptureKitCapturer.m
+--- a/macos/Classes/FlutterScreenCaptureKitCapturer.m
++++ b/macos/Classes/FlutterScreenCaptureKitCapturer.m
+@@ -9,13 +9,22 @@
+
+ @interface FlutterScreenCaptureKitCapturer ()
+ #if __has_include(<ScreenCaptureKit/ScreenCaptureKit.h>)
+-<SCStreamOutput>
++<SCStreamOutput, SCStreamDelegate>
+ #endif
+ @property(nonatomic, strong) RTCVideoCapturer *capturer;
+ @property(nonatomic, weak) id<RTCVideoCapturerDelegate> delegate;
+ @property(nonatomic, strong) dispatch_queue_t captureQueue;
+ #if __has_include(<ScreenCaptureKit/ScreenCaptureKit.h>)
+ @property(nonatomic, strong) SCStream *stream;
++@property(nonatomic, copy) NSString *sourceId;
++@property(nonatomic, copy) NSString *displayUUID;
++@property(nonatomic) NSInteger fps;
++@property(nonatomic) NSInteger maxWidth;
++@property(nonatomic) NSInteger maxHeight;
++@property(nonatomic) BOOL userStopping;
++@property(nonatomic) BOOL restartInProgress;
++@property(nonatomic) NSUInteger captureGeneration;
++@property(nonatomic) NSUInteger restartAttempt;
+ #endif
+ @end
+
+@@ -38,20 +47,79 @@
+                   onStarted:(void (^)(NSError * _Nullable error))onStarted {
+ #if __has_include(<ScreenCaptureKit/ScreenCaptureKit.h>)
+   if (@available(macOS 12.3, *)) {
+-    [SCShareableContent getShareableContentWithCompletionHandler:^(SCShareableContent *content, NSError *error) {
++    dispatch_async(self.captureQueue, ^{
++      self.fps = fps;
++      self.sourceId = sourceId;
++      self.maxWidth = maxWidth;
++      self.maxHeight = maxHeight;
++      self.displayUUID = nil;
++      self.userStopping = NO;
++      self.restartInProgress = NO;
++      self.restartAttempt = 0;
++      NSUInteger generation = ++self.captureGeneration;
++      [self startStreamForGeneration:generation completion:onStarted];
++    });
++    return;
++  }
++#endif
++
++  NSError *unavailable = [NSError errorWithDomain:@"FlutterScreenCaptureKit"
++                                             code:-2
++                                         userInfo:@{NSLocalizedDescriptionKey: @"ScreenCaptureKit not available"}];
++  onStarted(unavailable);
++}
++
++- (void)stopCaptureWithCompletion:(void (^)(void))completion {
++#if __has_include(<ScreenCaptureKit/ScreenCaptureKit.h>)
++  if (@available(macOS 12.3, *)) {
++    dispatch_async(self.captureQueue, ^{
++      self.userStopping = YES;
++      self.restartInProgress = NO;
++      ++self.captureGeneration;
++      SCStream *stream = self.stream;
++      self.stream = nil;
++      if (stream == nil) {
++        completion();
++        return;
++      }
++      [stream stopCaptureWithCompletionHandler:^(__unused NSError * _Nullable error) {
++        completion();
++      }];
++    });
++    return;
++  }
++#endif
++  completion();
++}
++
++#if __has_include(<ScreenCaptureKit/ScreenCaptureKit.h>)
++- (void)startStreamForGeneration:(NSUInteger)generation
++                      completion:(void (^)(NSError * _Nullable error))completion
++    API_AVAILABLE(macos(12.3)) {
++  [SCShareableContent getShareableContentWithCompletionHandler:^(SCShareableContent *content,
++                                                                  NSError *error) {
++    dispatch_async(self.captureQueue, ^{
++      if (generation != self.captureGeneration || self.userStopping) {
++        return;
++      }
+       if (error != nil) {
+-        onStarted(error);
++        completion(error);
+         return;
+       }
+
+-      SCDisplay *display = [self selectDisplayFromContent:content sourceId:sourceId];
++      SCDisplay *display = [self selectDisplayFromContent:content
++                                                 sourceId:self.sourceId
++                                              displayUUID:self.displayUUID];
+       if (display == nil) {
+         NSError *noDisplay = [NSError errorWithDomain:@"FlutterScreenCaptureKit"
+                                                  code:-1
+                                              userInfo:@{NSLocalizedDescriptionKey: @"No matching display"}];
+-        onStarted(noDisplay);
++        completion(noDisplay);
+         return;
+       }
++      if (self.displayUUID == nil) {
++        self.displayUUID = [self displayUUIDForDisplayID:display.displayID];
++      }
+
+       SCContentFilter *filter = [[SCContentFilter alloc] initWithDisplay:display excludingWindows:@[]];
+       SCStreamConfiguration *config = [SCStreamConfiguration new];
+@@ -66,70 +134,76 @@
+         CGDisplayModeRelease(displayMode);
+       }
+       double scale = 1.0;
+-      if (maxWidth > 0) {
+-        scale = MIN(scale, (double)maxWidth / sourceWidth);
++      if (self.maxWidth > 0) {
++        scale = MIN(scale, (double)self.maxWidth / sourceWidth);
+       }
+-      if (maxHeight > 0) {
+-        scale = MIN(scale, (double)maxHeight / sourceHeight);
++      if (self.maxHeight > 0) {
++        scale = MIN(scale, (double)self.maxHeight / sourceHeight);
+       }
+       config.width = MAX((size_t)2, ((size_t)(sourceWidth * scale)) & ~(size_t)1);
+       config.height = MAX((size_t)2, ((size_t)(sourceHeight * scale)) & ~(size_t)1);
+-      config.minimumFrameInterval = CMTimeMake(1, (int32_t)MAX(1, fps));
++      config.minimumFrameInterval = CMTimeMake(1, (int32_t)MAX(1, self.fps));
+       config.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
+       if (@available(macOS 13.0, *)) {
+         config.showsCursor = YES;
+       }
+
+-      self.stream = [[SCStream alloc] initWithFilter:filter configuration:config delegate:nil];
++      SCStream *stream = [[SCStream alloc] initWithFilter:filter configuration:config delegate:self];
+       NSError *addOutputError = nil;
+-      [self.stream addStreamOutput:self
+-                              type:SCStreamOutputTypeScreen
+-               sampleHandlerQueue:self.captureQueue
+-                            error:&addOutputError];
++      [stream addStreamOutput:self
++                         type:SCStreamOutputTypeScreen
++          sampleHandlerQueue:self.captureQueue
++                       error:&addOutputError];
+       if (addOutputError != nil) {
+-        onStarted(addOutputError);
++        completion(addOutputError);
+         return;
+       }
+
+-      [self.stream startCaptureWithCompletionHandler:^(NSError * _Nullable startError) {
+-        onStarted(startError);
++      self.stream = stream;
++      [stream startCaptureWithCompletionHandler:^(NSError * _Nullable startError) {
++        dispatch_async(self.captureQueue, ^{
++          if (generation != self.captureGeneration || self.userStopping || self.stream != stream) {
++            if (startError == nil) {
++              [stream stopCaptureWithCompletionHandler:nil];
++            }
++            return;
++          }
++          if (startError != nil) {
++            self.stream = nil;
++          }
++          completion(startError);
++        });
+       }];
+-    }];
+-    return;
+-  }
+-#endif
+-
+-  NSError *unavailable = [NSError errorWithDomain:@"FlutterScreenCaptureKit"
+-                                             code:-2
+-                                         userInfo:@{NSLocalizedDescriptionKey: @"ScreenCaptureKit not available"}];
+-  onStarted(unavailable);
++    });
++  }];
+ }
+
+-- (void)stopCaptureWithCompletion:(void (^)(void))completion {
+-#if __has_include(<ScreenCaptureKit/ScreenCaptureKit.h>)
+-  if (@available(macOS 12.3, *)) {
+-    if (self.stream == nil) {
+-      completion();
+-      return;
+-    }
+-    SCStream *stream = self.stream;
+-    self.stream = nil;
+-    [stream stopCaptureWithCompletionHandler:^(__unused NSError * _Nullable error) {
+-      completion();
+-    }];
+-    return;
++- (NSString *)displayUUIDForDisplayID:(CGDirectDisplayID)displayID API_AVAILABLE(macos(12.3)) {
++  CFUUIDRef uuid = CGDisplayCreateUUIDFromDisplayID(displayID);
++  if (uuid == NULL) {
++    return nil;
+   }
+-#endif
+-  completion();
++  NSString *value = CFBridgingRelease(CFUUIDCreateString(kCFAllocatorDefault, uuid));
++  CFRelease(uuid);
++  return value;
+ }
+
+-#if __has_include(<ScreenCaptureKit/ScreenCaptureKit.h>)
+ - (SCDisplay *)selectDisplayFromContent:(SCShareableContent *)content
+-                               sourceId:(NSString *)sourceId API_AVAILABLE(macos(12.3)) {
++                               sourceId:(NSString *)sourceId
++                            displayUUID:(NSString *)displayUUID API_AVAILABLE(macos(12.3)) {
+   if (content.displays.count == 0) {
+     return nil;
+   }
+
++  if (displayUUID.length > 0) {
++    for (SCDisplay *display in content.displays) {
++      if ([[self displayUUIDForDisplayID:display.displayID] isEqualToString:displayUUID]) {
++        return display;
++      }
++    }
++    return nil;
++  }
++
+   if (sourceId != nil && sourceId.length > 0) {
+     for (SCDisplay *display in content.displays) {
+       if ([[NSString stringWithFormat:@"%u", display.displayID] isEqualToString:sourceId]) {
+@@ -148,10 +222,63 @@
+   return content.displays.firstObject;
+ }
+
++- (void)scheduleRestartForGeneration:(NSUInteger)generation API_AVAILABLE(macos(12.3)) {
++  static const NSTimeInterval delays[] = {0.5, 1.0, 2.0};
++  if (self.restartAttempt >= sizeof(delays) / sizeof(delays[0])) {
++    self.restartInProgress = NO;
++    NSLog(@"ScreenCaptureKit recovery failed after %lu attempts", (unsigned long)self.restartAttempt);
++    return;
++  }
++
++  NSTimeInterval delay = delays[self.restartAttempt++];
++  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
++                 self.captureQueue, ^{
++    if (generation != self.captureGeneration || self.userStopping || self.stream != nil) {
++      return;
++    }
++    [self startStreamForGeneration:generation completion:^(NSError * _Nullable error) {
++      if (generation != self.captureGeneration || self.userStopping) {
++        return;
++      }
++      if (error != nil) {
++        NSLog(@"ScreenCaptureKit recovery attempt %lu failed: %@",
++              (unsigned long)self.restartAttempt, error);
++        [self scheduleRestartForGeneration:generation];
++        return;
++      }
++      self.restartAttempt = 0;
++      self.restartInProgress = NO;
++      NSLog(@"ScreenCaptureKit capture recovered");
++    }];
++  });
++}
++
+ - (void)stream:(SCStream *)stream
++didStopWithError:(NSError *)error API_AVAILABLE(macos(12.3)) {
++  dispatch_async(self.captureQueue, ^{
++    if (stream != self.stream || self.userStopping) {
++      return;
++    }
++    self.stream = nil;
++    if ([error.domain isEqualToString:SCStreamErrorDomain] &&
++        error.code == SCStreamErrorUserStopped) {
++      self.userStopping = YES;
++      NSLog(@"ScreenCaptureKit capture stopped by user");
++      return;
++    }
++    if (!self.restartInProgress) {
++      self.restartAttempt = 0;
++    }
++    self.restartInProgress = YES;
++    NSLog(@"ScreenCaptureKit capture stopped unexpectedly: %@; scheduling recovery", error);
++    [self scheduleRestartForGeneration:self.captureGeneration];
++  });
++}
++
++- (void)stream:(SCStream *)stream
+ didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
+         ofType:(SCStreamOutputType)type API_AVAILABLE(macos(12.3)) {
+-  if (type != SCStreamOutputTypeScreen) {
++  if (type != SCStreamOutputTypeScreen || stream != self.stream || self.userStopping) {
+     return;
+   }
