@@ -2518,6 +2518,53 @@ void main() {
     expect(find.text('user'), findsOneWidget);
   });
 
+  testWidgets('chat composer keeps focus after sending', (tester) async {
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+    final sent = <String>[];
+    var sending = false;
+    late StateSetter rebuild;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) {
+              rebuild = setState;
+              return ChatComposer(
+                controller: controller,
+                enabled: true,
+                readOnly: sending,
+                disabledHintText: '',
+                onAdd: () {},
+                onSend: () {
+                  sent.add(controller.text);
+                  controller.clear();
+                  setState(() => sending = true);
+                },
+              );
+            },
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byType(TextField));
+    await tester.enterText(find.byType(TextField), 'first');
+    await tester.testTextInput.receiveAction(TextInputAction.send);
+    await tester.pump();
+
+    final editable = tester.widget<EditableText>(find.byType(EditableText));
+    expect(sent, ['first']);
+    expect(editable.focusNode.hasFocus, isTrue);
+    rebuild(() => sending = false);
+    await tester.pump();
+    tester.testTextInput.enterText('second');
+    await tester.pump();
+    expect(controller.text, 'second');
+    await tester.testTextInput.receiveAction(TextInputAction.send);
+    expect(sent, ['first', 'second']);
+  });
+
   testWidgets('channel list extends behind the fixed current user card', (
     WidgetTester tester,
   ) async {

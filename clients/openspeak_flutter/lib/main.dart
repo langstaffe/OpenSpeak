@@ -9225,8 +9225,8 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
             ),
           ChatComposer(
             controller: messageController,
-            enabled:
-                (channelEnabled || directEnabled) && !loading && canSendText,
+            enabled: (channelEnabled || directEnabled) && canSendText,
+            readOnly: loading,
             addEnabled:
                 (channelEnabled || directEnabled) &&
                 !loading &&
@@ -15895,6 +15895,7 @@ class ChatComposer extends StatelessWidget {
     super.key,
     required this.controller,
     required this.enabled,
+    this.readOnly = false,
     this.addEnabled,
     this.hintText,
     required this.disabledHintText,
@@ -15904,6 +15905,7 @@ class ChatComposer extends StatelessWidget {
 
   final TextEditingController controller;
   final bool enabled;
+  final bool readOnly;
   final bool? addEnabled;
   final String? hintText;
   final String disabledHintText;
@@ -15920,11 +15922,13 @@ class ChatComposer extends StatelessWidget {
       child: TextField(
         controller: controller,
         enabled: enabled,
+        readOnly: readOnly,
         contextMenuBuilder: osEditableTextContextMenuBuilder,
         minLines: 1,
         maxLines: 4,
         textInputAction: TextInputAction.send,
-        onSubmitted: (_) => onSend(),
+        onEditingComplete: () {},
+        onSubmitted: readOnly ? null : (_) => onSend(),
         decoration: InputDecoration(
           hintText: enabled ? hintText : disabledHintText,
           filled: true,
@@ -15952,7 +15956,7 @@ class ChatComposer extends StatelessWidget {
           ),
           suffixIcon: IconButton(
             tooltip: '发送',
-            onPressed: enabled ? onSend : null,
+            onPressed: enabled && !readOnly ? onSend : null,
             icon: const Icon(Icons.send, size: 20),
           ),
         ),
