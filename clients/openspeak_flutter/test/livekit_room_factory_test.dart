@@ -1,7 +1,5 @@
 // ignore_for_file: implementation_imports, invalid_use_of_internal_member
 
-import 'dart:async';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart' as rtc;
 import 'package:flutter_test/flutter_test.dart';
@@ -42,7 +40,7 @@ void main() {
   });
 
   test(
-    'web engine observes a join response emitted during socket connect',
+    'web engine observes join and peer events emitted during socket connect',
     () async {
       final signalClient = _ImmediateJoinSignalClient();
       final engine = WebJoinSafeEngine(
@@ -56,12 +54,10 @@ void main() {
             response: livekit_rtc.JoinResponse(),
           ),
         );
-        Timer.run(
-          () => engine.events.emit(
-            const livekit_internal.EngineSubscriberPeerStateUpdatedEvent(
-              state: rtc.RTCPeerConnectionState.RTCPeerConnectionStateConnected,
-              isPrimary: true,
-            ),
+        engine.events.emit(
+          const livekit_internal.EngineSubscriberPeerStateUpdatedEvent(
+            state: rtc.RTCPeerConnectionState.RTCPeerConnectionStateConnected,
+            isPrimary: true,
           ),
         );
       };
@@ -70,4 +66,23 @@ void main() {
       await engine.dispose();
     },
   );
+
+  test('web engine allows a lazy manual-subscriber connection', () async {
+    final signalClient = _ImmediateJoinSignalClient();
+    final engine = WebJoinSafeEngine(
+      connectOptions: const lk.ConnectOptions(autoSubscribe: false),
+      roomOptions: const lk.RoomOptions(),
+      signalClient: signalClient,
+    );
+    signalClient.onConnect = () {
+      engine.events.emit(
+        livekit_internal.EngineJoinResponseEvent(
+          response: livekit_rtc.JoinResponse()..subscriberPrimary = true,
+        ),
+      );
+    };
+
+    await engine.connect('wss://voice.example', 'token');
+    await engine.dispose();
+  });
 }

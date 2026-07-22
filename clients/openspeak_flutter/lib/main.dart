@@ -5169,18 +5169,19 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   Future<AudioAttachmentMetadata> readAudioAttachmentMetadata(
     ChatAttachment attachment,
   ) async {
-    if (kIsWeb) return const AudioAttachmentMetadata();
-    final localSource = localAttachmentSources[attachment.fileId];
-    if (localSource != null && await localSource.exists()) {
-      return readAudioAttachmentMetadataFromFile(localSource);
-    }
-    final cachedFile = await attachmentCache.existingCachedFile(
-      fileId: attachment.fileId,
-      originalName: attachment.originalName,
-      expectedSizeBytes: attachment.sizeBytes,
-    );
-    if (cachedFile != null) {
-      return readAudioAttachmentMetadataFromFile(cachedFile);
+    if (!kIsWeb) {
+      final localSource = localAttachmentSources[attachment.fileId];
+      if (localSource != null && await localSource.exists()) {
+        return readAudioAttachmentMetadataFromFile(localSource);
+      }
+      final cachedFile = await attachmentCache.existingCachedFile(
+        fileId: attachment.fileId,
+        originalName: attachment.originalName,
+        expectedSizeBytes: attachment.sizeBytes,
+      );
+      if (cachedFile != null) {
+        return readAudioAttachmentMetadataFromFile(cachedFile);
+      }
     }
     final auth = session;
     final client = api;
