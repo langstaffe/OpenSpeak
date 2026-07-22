@@ -6,10 +6,15 @@
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
   <meta name="description" content="OpenSpeak Web">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    html, body { height: 100%; margin: 0; background: #202225; }
+    #loading { display: grid; height: 100%; place-items: center; color: #dcddde; font: 600 18px system-ui, sans-serif; }
+  </style>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%235865f2'/%3E%3Cpath d='M18 19h28v20H31l-9 7v-7h-4z' fill='white'/%3E%3C/svg%3E">
   <title>OpenSpeak</title>
 </head>
 <body>
+  <div id="loading" role="status">OpenSpeak 正在加载，首次打开请稍候…</div>
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>

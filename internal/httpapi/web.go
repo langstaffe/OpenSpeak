@@ -185,6 +185,7 @@ func (s *Server) serveWeb(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 	w.Header().Set("Cache-Control", "no-cache")
+	disableDownloadWriteTimeout(w)
 	http.ServeFile(w, r, asset)
 	return true
 }

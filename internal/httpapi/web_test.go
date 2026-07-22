@@ -62,10 +62,13 @@ func TestWebSettingsRouteAndSessionInvalidation(t *testing.T) {
 	if head.Code != http.StatusOK || head.Body.Len() != 0 || head.Header().Get("Content-Length") == "" {
 		t.Fatalf("custom index HEAD = %d, length = %q, body = %q", head.Code, head.Header().Get("Content-Length"), head.Body.String())
 	}
-	asset := httptest.NewRecorder()
+	asset := newDeadlineResponseRecorder()
 	env.server.ServeHTTP(asset, httptest.NewRequest(http.MethodGet, "https://example.test/chat/main.dart.js", nil))
 	if asset.Code != http.StatusOK || !strings.Contains(asset.Body.String(), "openspeak") {
 		t.Fatalf("custom asset = %d %q", asset.Code, asset.Body.String())
+	}
+	if !asset.writeTimeoutDisabled() {
+		t.Fatal("custom asset retained the server write timeout")
 	}
 
 	login := httptest.NewRequest(http.MethodPost, "https://example.test/api/v1/auth/login", strings.NewReader(`{"display_name":"Browser user","client_type":"web"}`))
