@@ -5,4 +5,7 @@
 // Do not install Flutter's offline app-shell service worker, which could keep
 // serving a disabled or moved entry point from the browser cache.
 window.addEventListener('flutter-first-frame', () => document.getElementById('loading')?.remove(), {once: true});
-_flutter.loader.load({config: {canvasKitBaseUrl: 'canvaskit'}});
+_flutter.loader.load({config: {
+  canvasKitBaseUrl: 'canvaskit',
+  fontFallbackBaseUrl: 'fonts/',
+}});

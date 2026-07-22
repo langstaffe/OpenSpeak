@@ -572,16 +572,6 @@ class OsColors {
   static const blurpleSoft = Color(0xFF303653);
 }
 
-class OsFonts {
-  static const primary = 'NotoSansSC';
-  static const fallback = <String>[
-    'Noto Sans CJK SC',
-    'Microsoft YaHei UI',
-    'PingFang SC',
-    'Arial',
-  ];
-}
-
 class SavedServerConnection {
   const SavedServerConnection({
     required this.id,
@@ -1141,8 +1131,6 @@ class OpenSpeakApp extends StatelessWidget {
           secondary: Color(0xFF3BA55D),
           surface: Color(0xFF2F3136),
         ),
-        fontFamily: OsFonts.primary,
-        fontFamilyFallback: OsFonts.fallback,
         iconButtonTheme: IconButtonThemeData(style: osClickableButtonStyle()),
         textButtonTheme: TextButtonThemeData(style: osClickableButtonStyle()),
         elevatedButtonTheme: ElevatedButtonThemeData(
@@ -1165,15 +1153,11 @@ class OpenSpeakApp extends StatelessWidget {
           ),
           titleTextStyle: const TextStyle(
             color: OsColors.text,
-            fontFamily: OsFonts.primary,
-            fontFamilyFallback: OsFonts.fallback,
             fontSize: 22,
             fontWeight: FontWeight.w900,
           ),
           contentTextStyle: const TextStyle(
             color: OsColors.muted,
-            fontFamily: OsFonts.primary,
-            fontFamilyFallback: OsFonts.fallback,
             fontSize: 14,
             height: 1.45,
           ),

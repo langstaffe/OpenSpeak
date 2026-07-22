@@ -453,16 +453,15 @@ func (s *Server) syncTLSGateway(ctx context.Context, servers []store.OSServer) e
 	if gateway == nil {
 		return nil
 	}
-	secureURL := secureServerURL(gateway.TLSIdentifier, s.cfg.TLS.SecurePublicPort)
-	current, err := os.ReadFile(s.cfg.TLS.CaddyConfigPath)
-	if err == nil && bytes.Contains(current, []byte(secureURL+" {")) && bytes.Contains(current, []byte("disable_tlsalpn_challenge")) {
-		return nil
-	}
 	var expected string
 	if active {
 		expected = buildCaddyfile(gateway.TLSCertificateType, gateway.TLSIdentifier, s.cfg.TLS.BackendUpstream, s.cfg.TLS.LiveKitUpstream, s.cfg.TLS.PlainPublicPort, s.cfg.TLS.SecurePublicPort)
 	} else {
 		expected = buildPlainCaddyfile(gateway.TLSCertificateType, gateway.TLSIdentifier, s.cfg.TLS.BackendUpstream, s.cfg.TLS.LiveKitUpstream, s.cfg.TLS.PlainPublicPort, s.cfg.TLS.SecurePublicPort)
+	}
+	current, err := os.ReadFile(s.cfg.TLS.CaddyConfigPath)
+	if err == nil && bytes.Equal(bytes.TrimSpace(current), bytes.TrimSpace([]byte(expected))) {
+		return nil
 	}
 	adminURL := strings.TrimRight(s.cfg.TLS.CaddyAdminURL, "/")
 	if _, err := caddyRequest(ctx, http.MethodPost, adminURL, "/load", "text/caddyfile", []byte(expected)); err != nil {
@@ -613,7 +612,7 @@ func disableServerTLS(ctx context.Context, cfg config.TLSConfig, repo Repository
 }
 
 func buildTLSDiscoverySite(certificateType, identifier, backend string, securePort int) string {
-	return fmt.Sprintf("%s {%s\n\treverse_proxy %s\n}\n", secureServerURL(identifier, securePort), caddyTLSBlock(certificateType), backend)
+	return fmt.Sprintf("%s {%s\n\tencode zstd gzip\n\treverse_proxy %s\n}\n", secureServerURL(identifier, securePort), caddyTLSBlock(certificateType), backend)
 }
 
 func plainServerURL(identifier string, port int) string {
@@ -635,6 +634,7 @@ func upstreamUsesPort(upstream string, port int) bool {
 
 func buildTLSSite(certificateType, identifier, backend, livekit string, securePort int) string {
 	return fmt.Sprintf(`%s {%s
+	encode zstd gzip
 	reverse_proxy /rtc* %s
 	reverse_proxy %s
 }

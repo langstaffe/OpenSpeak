@@ -21,6 +21,13 @@ func TestWebSettingsRouteAndSessionInvalidation(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(webRoot, "main.dart.js"), []byte(`window.openspeak=true;`), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	fontDir := filepath.Join(webRoot, "fonts", "notosanssc", "v37")
+	if err := os.MkdirAll(fontDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fontDir, "subset.woff2"), []byte("font-subset"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	env.server.cfg.WebRoot = webRoot
 	if _, err := env.repo.UpdateServerTLS(t.Context(), env.os.ID, "manual", "example.test", "active", "", nil, nil); err != nil {
 		t.Fatal(err)
@@ -69,6 +76,17 @@ func TestWebSettingsRouteAndSessionInvalidation(t *testing.T) {
 	}
 	if !asset.writeTimeoutDisabled() {
 		t.Fatal("custom asset retained the server write timeout")
+	}
+	font := newDeadlineResponseRecorder()
+	env.server.ServeHTTP(font, httptest.NewRequest(http.MethodGet, "https://example.test/chat/fonts/notosanssc/v37/subset.woff2", nil))
+	if font.Code != http.StatusOK || font.Body.String() != "font-subset" {
+		t.Fatalf("custom font = %d %q", font.Code, font.Body.String())
+	}
+	if got := font.Header().Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
+		t.Fatalf("custom font cache = %q", got)
+	}
+	if !font.writeTimeoutDisabled() {
+		t.Fatal("custom font retained the server write timeout")
 	}
 
 	login := httptest.NewRequest(http.MethodPost, "https://example.test/api/v1/auth/login", strings.NewReader(`{"display_name":"Browser user","client_type":"web"}`))

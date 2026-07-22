@@ -37,7 +37,7 @@ func TestTLSIdentifierValidationAndCaddyConfig(t *testing.T) {
 	}
 
 	config := buildCaddyfile("ip", "2001:4860:4860::8888", "127.0.0.1:27411", "127.0.0.1:27420", 27410, 27412)
-	for _, required := range []string{"auto_https disable_redirects", "default_sni 2001:4860:4860::8888", "https://[2001:4860:4860::8888]:27412", "disable_tlsalpn_challenge", "profile shortlived", "reverse_proxy /rtc* 127.0.0.1:27420", "reverse_proxy 127.0.0.1:27411"} {
+	for _, required := range []string{"auto_https disable_redirects", "default_sni 2001:4860:4860::8888", "https://[2001:4860:4860::8888]:27412", "disable_tlsalpn_challenge", "profile shortlived", "encode zstd gzip", "reverse_proxy /rtc* 127.0.0.1:27420", "reverse_proxy 127.0.0.1:27411"} {
 		if !strings.Contains(config, required) {
 			t.Fatalf("Caddy config missing %q:\n%s", required, config)
 		}
@@ -71,7 +71,7 @@ func TestBuildPlainCaddyfileKeepsOnlyHTTPGateway(t *testing.T) {
 	if !strings.Contains(config, "http://:28080") || !strings.Contains(config, "reverse_proxy 127.0.0.1:27411") || !strings.Contains(config, "reverse_proxy /rtc* 127.0.0.1:27420") {
 		t.Fatalf("plain Caddyfile = %q", config)
 	}
-	if !strings.Contains(config, "https://voice.example.com:28443") || !strings.Contains(config, "disable_tlsalpn_challenge") {
+	if !strings.Contains(config, "https://voice.example.com:28443") || !strings.Contains(config, "disable_tlsalpn_challenge") || !strings.Contains(config, "encode zstd gzip") {
 		t.Fatalf("plain Caddyfile dropped HTTPS discovery alias: %q", config)
 	}
 }
@@ -94,7 +94,11 @@ func TestSyncTLSGatewayMigratesActiveGatewayToSecurePort(t *testing.T) {
 	}))
 	defer admin.Close()
 	caddyPath := filepath.Join(t.TempDir(), "Caddyfile")
-	if err := os.WriteFile(caddyPath, []byte("voice.example.com {\n}\n"), 0o600); err != nil {
+	legacyConfig := strings.ReplaceAll(
+		buildCaddyfile("domain", "voice.example.com", "127.0.0.1:27411", "127.0.0.1:27420", 27410, 27412),
+		"\tencode zstd gzip\n", "",
+	)
+	if err := os.WriteFile(caddyPath, []byte(legacyConfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	env.server.cfg.TLS = config.TLSConfig{

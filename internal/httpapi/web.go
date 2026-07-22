@@ -184,7 +184,11 @@ func (s *Server) serveWeb(w http.ResponseWriter, r *http.Request) bool {
 		_, _ = w.Write([]byte(body))
 		return true
 	}
-	w.Header().Set("Cache-Control", "no-cache")
+	if strings.HasPrefix(filepath.ToSlash(clean), "fonts/") {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	} else {
+		w.Header().Set("Cache-Control", "no-cache")
+	}
 	disableDownloadWriteTimeout(w)
 	http.ServeFile(w, r, asset)
 	return true
