@@ -282,19 +282,42 @@ class VoiceScreenShare {
   final double aspectRatio;
 }
 
+class _OpenSpeakAudioCaptureOptions extends lk.AudioCaptureOptions {
+  const _OpenSpeakAudioCaptureOptions({
+    required bool noiseSuppressionEnabled,
+    super.deviceId,
+  }) : super(
+         echoCancellation: true,
+         autoGainControl: true,
+         noiseSuppression: noiseSuppressionEnabled,
+         highPassFilter: noiseSuppressionEnabled,
+         typingNoiseDetection: noiseSuppressionEnabled,
+         voiceIsolation: noiseSuppressionEnabled,
+         stopAudioCaptureOnMute: false,
+       );
+
+  @override
+  Map<String, dynamic> toMediaConstraintsMap() {
+    final constraints = super.toMediaConstraintsMap();
+    if (kIsWeb && deviceId?.isNotEmpty == true) {
+      constraints.addAll({
+        'echoCancellation': echoCancellation,
+        'autoGainControl': autoGainControl,
+        'noiseSuppression': noiseSuppression,
+        'voiceIsolation': voiceIsolation,
+      });
+    }
+    return constraints;
+  }
+}
+
 lk.AudioCaptureOptions voiceAudioCaptureOptions({
   required bool noiseSuppressionEnabled,
   String? deviceId,
 }) {
-  return lk.AudioCaptureOptions(
+  return _OpenSpeakAudioCaptureOptions(
     deviceId: deviceId,
-    echoCancellation: true,
-    autoGainControl: true,
-    noiseSuppression: noiseSuppressionEnabled,
-    highPassFilter: noiseSuppressionEnabled,
-    typingNoiseDetection: noiseSuppressionEnabled,
-    voiceIsolation: noiseSuppressionEnabled,
-    stopAudioCaptureOnMute: false,
+    noiseSuppressionEnabled: noiseSuppressionEnabled,
   );
 }
 

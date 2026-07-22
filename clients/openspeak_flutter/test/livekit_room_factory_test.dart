@@ -9,6 +9,7 @@ import 'package:livekit_client/src/proto/livekit_models.pb.dart'
     as livekit_models;
 import 'package:livekit_client/src/proto/livekit_rtc.pb.dart' as livekit_rtc;
 import 'package:openspeak_flutter/livekit_room_factory.dart';
+import 'package:openspeak_flutter/voice_session_controller.dart';
 
 class _ImmediateJoinSignalClient extends livekit_internal.SignalClient {
   _ImmediateJoinSignalClient()
@@ -36,6 +37,31 @@ void main() {
     );
     expect(room.engine is WebJoinSafeEngine, kIsWeb);
     await room.dispose();
+  });
+
+  test('selected Web microphone keeps audio processing constraints', () {
+    final enabled = voiceAudioCaptureOptions(
+      noiseSuppressionEnabled: true,
+      deviceId: 'microphone-1',
+    ).toMediaConstraintsMap();
+    final disabled = voiceAudioCaptureOptions(
+      noiseSuppressionEnabled: false,
+      deviceId: 'microphone-1',
+    ).toMediaConstraintsMap();
+
+    if (kIsWeb) {
+      expect(enabled['deviceId'], isNotNull);
+      expect(enabled['echoCancellation'], isTrue);
+      expect(enabled['autoGainControl'], isTrue);
+      expect(enabled['noiseSuppression'], isTrue);
+      expect(enabled['voiceIsolation'], isTrue);
+      expect(disabled['echoCancellation'], isTrue);
+      expect(disabled['autoGainControl'], isTrue);
+      expect(disabled['noiseSuppression'], isFalse);
+      expect(disabled['voiceIsolation'], isFalse);
+    } else {
+      expect(enabled['optional'], isNotEmpty);
+    }
   });
 
   test('web engine connects after an immediate signaling join', () async {
