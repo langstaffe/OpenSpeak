@@ -6,6 +6,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart' as rtc;
 import 'package:livekit_client/livekit_client.dart' as lk;
 
 import 'client_log.dart';
+import 'livekit_room_factory.dart';
 import 'microphone_activation.dart';
 import 'openspeak_api.dart';
 
@@ -1123,7 +1124,9 @@ class VoiceSessionController extends ChangeNotifier {
       await keyProvider.setRawKey(key, keyIndex: 1 - token.e2eeKeyIndex);
       encryption = lk.E2EEOptions(keyProvider: keyProvider);
     }
-    final room = lk.Room(roomOptions: lk.RoomOptions(encryption: encryption));
+    final room = createOpenSpeakLiveKitRoom(
+      roomOptions: lk.RoomOptions(encryption: encryption),
+    );
     _screenRoom = room;
     _screenToken = token;
     _expectedScreenPublisherUserId = expectedPublisherUserId;
@@ -1602,7 +1605,7 @@ class VoiceSessionController extends ChangeNotifier {
         }
         encryption = lk.E2EEOptions(keyProvider: keyProvider);
       }
-      final room = lk.Room(
+      final room = createOpenSpeakLiveKitRoom(
         roomOptions: lk.RoomOptions(
           defaultAudioCaptureOptions: _audioCaptureOptions,
           defaultAudioPublishOptions: voiceAudioPublishOptions(
