@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -63,6 +64,36 @@ func TestTicketRejectsExpiredAndOversizedUpload(t *testing.T) {
 	server.ServeHTTP(largeResponse, large)
 	if largeResponse.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("large upload status = %d", largeResponse.Code)
+	}
+}
+
+func TestSignedURLAllowsBrowserCORS(t *testing.T) {
+	server := &Server{Root: t.TempDir(), Secret: "test-secret"}
+	uploadURL, err := SignedURL("https://file-node", server.Secret, Ticket{
+		Operation: "put", ObjectKey: "browser", ExpiresAt: time.Now().Add(time.Minute), MaxBytes: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	preflight := requestForURL(t, http.MethodOptions, uploadURL, nil)
+	preflight.Header.Set("Origin", "https://openspeak.example")
+	preflight.Header.Set("Access-Control-Request-Method", http.MethodPut)
+	preflight.Header.Set("Access-Control-Request-Headers", "content-type")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, preflight)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("preflight status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if response.Header().Get("Access-Control-Allow-Origin") != "*" ||
+		!strings.Contains(response.Header().Get("Access-Control-Allow-Methods"), http.MethodPut) {
+		t.Fatalf("preflight headers = %v", response.Header())
+	}
+	upload := requestForURL(t, http.MethodPut, uploadURL, strings.NewReader("web"))
+	upload.Header.Set("Origin", "https://openspeak.example")
+	uploadResponse := httptest.NewRecorder()
+	server.ServeHTTP(uploadResponse, upload)
+	if uploadResponse.Code != http.StatusOK || uploadResponse.Header().Get("Access-Control-Allow-Origin") != "*" {
+		t.Fatalf("upload response = %d, headers = %v", uploadResponse.Code, uploadResponse.Header())
 	}
 }
 

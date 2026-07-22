@@ -117,6 +117,7 @@ OPEN_SPEAK_BIN="${PACKAGE_DIR}/bin/openspeak-linux-amd64"
 OPEN_SPEAK_CTL_BIN="${PACKAGE_DIR}/bin/openspeakctl"
 LIVEKIT_BIN="${PACKAGE_DIR}/bin/livekit-server"
 CADDY_BIN="${PACKAGE_DIR}/bin/caddy"
+WEB_ROOT="${PACKAGE_DIR}/web"
 
 if [[ ! -f "${OPEN_SPEAK_BIN}" ]]; then
   echo "missing ${OPEN_SPEAK_BIN}" >&2
@@ -128,6 +129,10 @@ if [[ ! -f "${OPEN_SPEAK_CTL_BIN}" ]]; then
 fi
 if [[ ! -f "${CADDY_BIN}" ]]; then
   echo "missing ${CADDY_BIN}" >&2
+  exit 1
+fi
+if [[ ! -f "${WEB_ROOT}/index.html" ]]; then
+  echo "missing ${WEB_ROOT}/index.html" >&2
   exit 1
 fi
 CADDY_VERSION="$("${CADDY_BIN}" version)"
@@ -178,6 +183,8 @@ install -d -m 0750 "${CONFIG_DIR}"
 install -m 0755 "${OPEN_SPEAK_BIN}" "${PREFIX}/openspeak-linux-amd64"
 install -m 0755 "${OPEN_SPEAK_CTL_BIN}" "${PREFIX}/openspeakctl"
 install -m 0755 "${CADDY_BIN}" "${PREFIX}/caddy"
+install -d -m 0755 "${PREFIX}/web"
+cp -R "${WEB_ROOT}/." "${PREFIX}/web/"
 ln -sf "${PREFIX}/openspeakctl" /usr/local/bin/openspeakctl
 if [[ "${WITH_LIVEKIT}" -eq 1 ]]; then
   install -m 0755 "${LIVEKIT_BIN}" "${PREFIX}/livekit-server"
@@ -191,6 +198,7 @@ OS_ADDR=127.0.0.1:${OPENSPEAK_BACKEND_PORT}
 OS_DATABASE_PATH=${DATA_DIR}/openspeak.db
 OS_FILE_ROOT=${DATA_DIR}/files
 OS_DIRECT_FILE_ROOT=${DATA_DIR}/tmp/direct_files
+OS_WEB_ROOT=${PREFIX}/web
 OS_LOG_FILE=${LOG_DIR}/openspeak.log
 OS_LOG_LEVEL=info
 OS_JWT_SECRET=${JWT_SECRET}
@@ -231,6 +239,7 @@ append_env_if_missing OS_TLS_BACKEND_UPSTREAM "127.0.0.1:${CONFIGURED_BACKEND_PO
 append_env_if_missing OS_PLAIN_PUBLIC_PORT "${OPENSPEAK_PORT}"
 append_env_if_missing OS_TLS_PUBLIC_PORT "${OPENSPEAK_TLS_PORT}"
 append_env_if_missing OS_TLS_LIVEKIT_UPSTREAM "127.0.0.1:${LIVEKIT_SIGNAL_PORT}"
+append_env_if_missing OS_WEB_ROOT "${PREFIX}/web"
 
 CONFIGURED_CADDY_ADMIN_URL="$(sed -n 's/^OS_CADDY_ADMIN_URL=//p' "${CONFIG_DIR}/openspeak.env" | tail -n 1)"
 CADDY_ADMIN_PRESTART=""

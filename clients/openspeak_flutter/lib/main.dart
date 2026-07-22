@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:ffi' as ffi;
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -10,10 +9,9 @@ import 'package:desktop_drop/desktop_drop.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:cryptography/cryptography.dart';
 import 'package:file_selector/file_selector.dart';
-import 'package:ffi/ffi.dart' as native_strings;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart'
-    show TargetPlatform, ValueListenable, defaultTargetPlatform;
+    show TargetPlatform, ValueListenable, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
@@ -32,11 +30,13 @@ import 'package:livekit_client/livekit_client.dart' as lk;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
 import 'attachment_cache_service.dart';
+import 'browser_actions.dart';
 import 'client_log.dart';
 import 'device_identity_service.dart';
 import 'microphone_activation.dart';
 import 'openspeak_api.dart';
 import 'owner_identity_service.dart';
+import 'platform_open.dart';
 import 'sound_effects.dart';
 import 'voice_session_controller.dart';
 
@@ -65,6 +65,16 @@ const defaultServerUrl = String.fromEnvironment(
   'OPENSPEAK_DEFAULT_SERVER_URL',
   defaultValue: 'http://127.0.0.1:27410',
 );
+
+String initialServerUrl() {
+  if (!kIsWeb) return defaultServerUrl;
+  final base = Uri.base;
+  return Uri(
+    scheme: base.scheme,
+    host: base.host,
+    port: base.hasPort ? base.port : null,
+  ).toString().replaceFirst(RegExp(r'/$'), '');
+}
 
 const savedConnectionsKey = 'openspeak.savedConnections.v1';
 const localProfileDisplayNameKey = 'openspeak.localProfileDisplayName.v1';
@@ -495,13 +505,14 @@ List<ServerMenuAction> serverMenuActions({
   required bool claimed,
   required bool isOwner,
   required Set<String> permissions,
+  bool allowPairing = true,
 }) => [
   if (!claimed) ServerMenuAction.claim,
   if (claimed && (isOwner || serverSettingsPages(permissions).isNotEmpty))
     ServerMenuAction.settings,
   if (claimed && (isOwner || permissions.contains('member.view')))
     ServerMenuAction.members,
-  if (claimed && !isOwner) ServerMenuAction.pair,
+  if (claimed && !isOwner && allowPairing) ServerMenuAction.pair,
 ];
 
 List<String> serverSettingsPages(Set<String> permissions) => [
@@ -1213,7 +1224,7 @@ class OpenSpeakHome extends StatefulWidget {
 }
 
 class _OpenSpeakHomeState extends State<OpenSpeakHome> {
-  final serverUrlController = TextEditingController(text: defaultServerUrl);
+  final serverUrlController = TextEditingController(text: initialServerUrl());
   final passwordController = TextEditingController();
   final activityScrollController = ScrollController();
   final channelScrollController = ScrollController();
@@ -1228,7 +1239,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   final pushToTalkHotkey = GlobalPushToTalkHotkey();
 
   OpenSpeakApi? api;
-  WebSocket? socket;
+  OpenSpeakSocket? socket;
   int socketGeneration = 0;
   Timer? realtimeStateRefreshTimer;
   int channelMessagesLoadGeneration = 0;
@@ -1299,6 +1310,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   final Map<String, double> memberOutputVolumes = {};
   String? activeAudioFileId;
   String? activeAudioProxyId;
+  String? activeAudioObjectUrl;
   String? loadingAudioFileId;
   Duration audioPosition = Duration.zero;
   Duration audioDuration = Duration.zero;
@@ -1383,6 +1395,9 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     unawaited(audioDurationSub?.cancel());
     unawaited(audioStateSub?.cancel());
     unawaited(audioCompleteSub?.cancel());
+    final audioObjectUrl = activeAudioObjectUrl;
+    activeAudioObjectUrl = null;
+    if (audioObjectUrl != null) revokeBrowserObjectUrl(audioObjectUrl);
     unawaited(audioPlayer.dispose());
     unawaited(soundEffects.dispose());
     unawaited(audioStreamProxy.dispose());
@@ -1568,7 +1583,9 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     final generation = ++connectionGeneration;
     channelJoinQueue.invalidate();
     await runGuarded(() async {
-      var nextApi = OpenSpeakApi(serverUrlController.text.trim());
+      var nextApi = OpenSpeakApi(
+        kIsWeb ? initialServerUrl() : serverUrlController.text.trim(),
+      );
       final discoveredSecureUrl = await nextApi.discoverSecureUrl();
       if (discoveredSecureUrl.isNotEmpty) {
         if (!isActiveConnectionGeneration(generation)) return;
@@ -1607,7 +1624,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       }
       var nextServers = await nextApi.listServers(nextSession.token);
       final loginUserId = nextSession.user.id;
-      if (nextServers.isNotEmpty) {
+      if (!kIsWeb && nextServers.isNotEmpty) {
         final hasOwnerCredentialHint = await ownerIdentity.hasCredentialHint(
           nextServers.first.id,
         );
@@ -1643,7 +1660,9 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       // Owner device authentication can switch the ordinary installation
       // login to the stable owner identity. Sync only after that switch so the
       // avatar is cached on the identity that will actually enter the server.
-      nextSession = await syncLocalAvatarWithServer(nextApi, nextSession);
+      if (!kIsWeb) {
+        nextSession = await syncLocalAvatarWithServer(nextApi, nextSession);
+      }
       E2EEDeviceIdentity? e2eeIdentity;
       if (nextServers.isNotEmpty &&
           nextServers.first.encryptionMode == 'e2ee') {
@@ -1656,7 +1675,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       final nextDevice = await nextApi.registerDevice(
         nextSession.token,
         nextSession.user.id,
-        'OpenSpeak Desktop Prototype',
+        kIsWeb ? 'OpenSpeak Web' : 'OpenSpeak Desktop Prototype',
         deviceId: e2eeIdentity?.deviceId ?? '',
         identityPublicKey: e2eeIdentity?.identityPublicKey ?? '',
         envelopePublicKey: e2eeIdentity?.envelopePublicKey ?? '',
@@ -1758,7 +1777,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     if (raw == null || raw.trim().isEmpty) return;
     final decoded = jsonDecode(raw);
     if (decoded is! List) return;
-    final loaded = decoded
+    var loaded = decoded
         .whereType<Map>()
         .map(
           (item) =>
@@ -1766,6 +1785,10 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         )
         .where((item) => item.url.isNotEmpty)
         .toList();
+    if (kIsWeb) {
+      final origin = initialServerUrl();
+      loaded = loaded.where((item) => item.url == origin).toList();
+    }
     if (!mounted) return;
     setState(() => savedConnections = loaded);
   }
@@ -1773,6 +1796,12 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   Future<void> loadLocalProfile() async {
     final prefs = await SharedPreferences.getInstance();
     final savedName = prefs.getString(localProfileDisplayNameKey)?.trim();
+    if (kIsWeb) {
+      if (mounted && savedName != null && savedName.isNotEmpty) {
+        setState(() => localDisplayName = savedName);
+      }
+      return;
+    }
     final avatar = await localAvatarStorageFile();
     final avatarExists = await avatar.exists() && await avatar.length() > 0;
     if (!mounted) return;
@@ -1873,9 +1902,13 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         .toDouble();
     soundEffects.volume = soundEffectVolume;
     noiseSuppressionEnabled = prefs.getBool(noiseSuppressionEnabledKey) ?? true;
-    microphoneActivationMode = MicrophoneActivationModeValue.parse(
+    final savedActivationMode = MicrophoneActivationModeValue.parse(
       prefs.getString(microphoneActivationModeKey),
     );
+    microphoneActivationMode =
+        kIsWeb && savedActivationMode == MicrophoneActivationMode.pushToTalk
+        ? MicrophoneActivationMode.continuous
+        : savedActivationMode;
     microphoneThreshold = (prefs.getDouble(microphoneThresholdKey) ?? 0.4)
         .clamp(0.0, 1.0)
         .toDouble();
@@ -2081,6 +2114,10 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   }
 
   Future<void> showAddServerDialog() async {
+    if (kIsWeb) {
+      await showWebConnectDialog();
+      return;
+    }
     final addressController = TextEditingController();
     final portController = TextEditingController();
     final passwordController = TextEditingController(
@@ -2103,6 +2140,73 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       addressController.dispose();
       portController.dispose();
       passwordController.dispose();
+    }
+  }
+
+  Future<void> showWebConnectDialog() async {
+    final nameController = TextEditingController(text: localDisplayName);
+    final password = TextEditingController(text: passwordController.text);
+    try {
+      final connect = await showDialog<bool>(
+        context: context,
+        barrierColor: const Color(0xB8000000),
+        builder: (dialogContext) => AlertDialog(
+          backgroundColor: OsColors.content,
+          title: const Text('连接 OpenSpeak'),
+          content: SizedBox(
+            width: 390,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameController,
+                  autofocus: true,
+                  decoration: const InputDecoration(labelText: '显示名称'),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: password,
+                  obscureText: true,
+                  decoration: const InputDecoration(labelText: '服务器密码（如有）'),
+                  onSubmitted: (_) => Navigator.pop(dialogContext, true),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('连接'),
+            ),
+          ],
+        ),
+      );
+      if (connect != true) return;
+      final displayName = nameController.text.trim();
+      if (displayName.isEmpty) {
+        if (mounted) setState(() => error = '显示名称不能为空');
+        return;
+      }
+      localDisplayName = displayName;
+      passwordController.text = password.text;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(localProfileDisplayNameKey, displayName);
+      final url = initialServerUrl();
+      await addSavedConnection(
+        SavedServerConnection(
+          id: url.toLowerCase(),
+          name: Uri.base.host,
+          url: url,
+          password: password.text,
+        ),
+      );
+    } finally {
+      nameController.dispose();
+      password.dispose();
     }
   }
 
@@ -2792,7 +2896,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     }
   }
 
-  Future<void> _readSocket(WebSocket ws, int generation) async {
+  Future<void> _readSocket(OpenSpeakSocket ws, int generation) async {
     try {
       await for (final raw in ws) {
         if (!identical(socket, ws) || generation != socketGeneration) return;
@@ -2800,6 +2904,13 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         final event = RealtimeEvent.fromJson(
           jsonDecode(raw) as Map<String, dynamic>,
         );
+        if (kIsWeb && event.type == 'web.settings_changed') {
+          await disconnectCurrentServer();
+          if (mounted) {
+            setState(() => error = '网页端配置已更改，请从新的访问地址重新进入');
+          }
+          return;
+        }
         setState(() {
           activity.insert(0, event);
           if (activity.length > 80) activity.removeLast();
@@ -3003,7 +3114,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   }
 
   Future<void> reconnectWebSocketAfterDrop(
-    WebSocket droppedSocket,
+    OpenSpeakSocket droppedSocket,
     int generation,
   ) async {
     final connectionId = selectedConnection?.id;
@@ -3045,6 +3156,13 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
             exception.statusCode == HttpStatus.notFound ||
             exception.code == 'https_required' ||
             exception.code == 'http_required') {
+          if (kIsWeb) {
+            await disconnectCurrentServer();
+            if (mounted) {
+              setState(() => error = '网页端会话已失效，请重新进入');
+            }
+            return;
+          }
           await login();
           return;
         }
@@ -3061,6 +3179,13 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                 probeError.statusCode == HttpStatus.forbidden ||
                 probeError.code == 'https_required' ||
                 probeError.code == 'http_required') {
+              if (kIsWeb) {
+                await disconnectCurrentServer();
+                if (mounted) {
+                  setState(() => error = '网页端会话已失效，请重新进入');
+                }
+                return;
+              }
               await login();
               return;
             }
@@ -4075,7 +4200,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     await runGuarded(() async {
       final selected = await openFiles();
       if (selected.isEmpty) return;
-      final files = <File>[];
+      final files = <XFile>[];
       for (final item in selected) {
         final file = await fileFromSelection(item);
         if (file != null) files.add(file);
@@ -4089,7 +4214,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   }
 
   void enqueueAttachmentUploads(
-    List<File> files, {
+    List<XFile> files, {
     required bool direct,
     required String targetId,
   }) {
@@ -4152,8 +4277,14 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     }
   }
 
-  Future<File?> fileFromSelection(XFile? selected) async {
+  Future<XFile?> fileFromSelection(XFile? selected) async {
     if (selected == null) return null;
+    if (kIsWeb) {
+      if (await selected.length() <= 0) {
+        throw OpenSpeakException('所选文件为空');
+      }
+      return selected;
+    }
     final path = selected.path.trim();
     if (path.isEmpty) {
       throw OpenSpeakException('无法读取所选文件路径，请检查 macOS 文件访问权限');
@@ -4162,7 +4293,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     if (!await file.exists()) {
       throw OpenSpeakException('所选文件不存在或无法访问: $path');
     }
-    return file;
+    return selected;
   }
 
   Future<void> uploadChannelAttachment(TransferTask task) async {
@@ -4180,9 +4311,10 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     final file = task.file;
     final fileLength = await file.length();
     task.totalBytes = fileLength;
-    final localMessage = task.image
+    final desktopFile = kIsWeb ? null : File(file.path);
+    final localMessage = task.image && desktopFile != null
         ? createOptimisticChannelAttachmentMessage(
-            file: file,
+            file: desktopFile,
             channelId: task.targetId,
             senderUserId: auth.user.id,
             sizeBytes: fileLength,
@@ -4221,22 +4353,40 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
               channel,
               epochId: state.epoch.id,
             );
-            tempDir = await Directory.systemTemp.createTemp(
-              'openspeak_e2ee_upload_',
-            );
-            final encrypted = await deviceIdentity.encryptAttachmentFile(
-              input: file,
-              output: File('${tempDir.path}${Platform.pathSeparator}payload'),
-              channelKey: key,
-              channelId: channel.id,
-              epochId: state.epoch.id,
-              checkCancelled: () => task.cancelToken.throwIfCancelled('上传已取消'),
-              onProgress: (done, total) =>
-                  updateTransferProgress(task, done ~/ 5, total),
-            );
-            uploadFile = encrypted.file;
+            String encryptedNonce;
+            if (kIsWeb) {
+              final encrypted = await deviceIdentity.encryptAttachmentBytes(
+                input: await file.readAsBytes(),
+                channelKey: key,
+                channelId: channel.id,
+                epochId: state.epoch.id,
+                checkCancelled: () =>
+                    task.cancelToken.throwIfCancelled('上传已取消'),
+                onProgress: (done, total) =>
+                    updateTransferProgress(task, done ~/ 5, total),
+              );
+              uploadFile = XFile.fromData(encrypted.bytes, name: 'payload');
+              encryptedNonce = encrypted.nonce;
+            } else {
+              tempDir = await Directory.systemTemp.createTemp(
+                'openspeak_e2ee_upload_',
+              );
+              final encrypted = await deviceIdentity.encryptAttachmentFile(
+                input: File(file.path),
+                output: File('${tempDir.path}${Platform.pathSeparator}payload'),
+                channelKey: key,
+                channelId: channel.id,
+                epochId: state.epoch.id,
+                checkCancelled: () =>
+                    task.cancelToken.throwIfCancelled('上传已取消'),
+                onProgress: (done, total) =>
+                    updateTransferProgress(task, done ~/ 5, total),
+              );
+              uploadFile = XFile(encrypted.file.path);
+              encryptedNonce = encrypted.nonce;
+            }
             epochId = state.epoch.id;
-            nonce = encrypted.nonce;
+            nonce = encryptedNonce;
             format = attachmentEncryptionFormatV1;
             chunkSize = attachmentEncryptionChunkSize;
           }
@@ -4301,12 +4451,14 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       }
       rethrow;
     }
-    await seedUploadedAttachmentCache(
-      file: file,
-      fileId: result.file.id,
-      originalName: result.file.originalName,
-      sizeBytes: fileLength,
-    );
+    if (!kIsWeb) {
+      await seedUploadedAttachmentCache(
+        file: File(file.path),
+        fileId: result.file.id,
+        originalName: result.file.originalName,
+        sizeBytes: fileLength,
+      );
+    }
     if (task.cancelToken.isCancelled || !mounted) return;
     setState(() {
       if (localMessage != null) {
@@ -4332,9 +4484,10 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     final file = task.file;
     final fileLength = await file.length();
     task.totalBytes = fileLength;
-    final localMessage = task.image
+    final desktopFile = kIsWeb ? null : File(file.path);
+    final localMessage = task.image && desktopFile != null
         ? createOptimisticDirectAttachmentMessage(
-            file: file,
+            file: desktopFile,
             fromUserId: auth.user.id,
             toUserId: task.targetId,
             sizeBytes: fileLength,
@@ -4366,27 +4519,44 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       var envelopes = const <Map<String, String>>[];
       if (mode == 'e2ee') {
         final prepared = await prepareDirectEncryption(task.targetId);
-        tempDir = await Directory.systemTemp.createTemp(
-          'openspeak_e2ee_direct_',
+        final scope = directEncryptionScope(
+          prepared.serverId,
+          auth.user.id,
+          task.targetId,
         );
-        final encrypted = await deviceIdentity.encryptAttachmentFile(
-          input: file,
-          output: File('${tempDir.path}${Platform.pathSeparator}payload'),
-          channelKey: prepared.key,
-          channelId: directEncryptionScope(
-            prepared.serverId,
-            auth.user.id,
-            task.targetId,
-          ),
-          epochId: prepared.messageId,
-          checkCancelled: () => task.cancelToken.throwIfCancelled('上传已取消'),
-          onProgress: (done, total) =>
-              updateTransferProgress(task, done ~/ 5, total),
-        );
-        uploadFile = encrypted.file;
+        String encryptedNonce;
+        if (kIsWeb) {
+          final encrypted = await deviceIdentity.encryptAttachmentBytes(
+            input: await file.readAsBytes(),
+            channelKey: prepared.key,
+            channelId: scope,
+            epochId: prepared.messageId,
+            checkCancelled: () => task.cancelToken.throwIfCancelled('上传已取消'),
+            onProgress: (done, total) =>
+                updateTransferProgress(task, done ~/ 5, total),
+          );
+          uploadFile = XFile.fromData(encrypted.bytes, name: 'payload');
+          encryptedNonce = encrypted.nonce;
+        } else {
+          tempDir = await Directory.systemTemp.createTemp(
+            'openspeak_e2ee_direct_',
+          );
+          final encrypted = await deviceIdentity.encryptAttachmentFile(
+            input: File(file.path),
+            output: File('${tempDir.path}${Platform.pathSeparator}payload'),
+            channelKey: prepared.key,
+            channelId: scope,
+            epochId: prepared.messageId,
+            checkCancelled: () => task.cancelToken.throwIfCancelled('上传已取消'),
+            onProgress: (done, total) =>
+                updateTransferProgress(task, done ~/ 5, total),
+          );
+          uploadFile = XFile(encrypted.file.path);
+          encryptedNonce = encrypted.nonce;
+        }
         messageId = prepared.messageId;
         senderDeviceId = prepared.senderDeviceId;
-        nonce = encrypted.nonce;
+        nonce = encryptedNonce;
         format = attachmentEncryptionFormatV1;
         chunkSize = attachmentEncryptionChunkSize;
         envelopes = prepared.envelopes;
@@ -4427,12 +4597,14 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         await tempDir.delete(recursive: true);
       }
     }
-    await seedUploadedAttachmentCache(
-      file: file,
-      fileId: directFile.id,
-      originalName: directFile.originalName,
-      sizeBytes: fileLength,
-    );
+    if (!kIsWeb) {
+      await seedUploadedAttachmentCache(
+        file: File(file.path),
+        fileId: directFile.id,
+        originalName: directFile.originalName,
+        sizeBytes: fileLength,
+      );
+    }
   }
 
   void updateTransferProgress(TransferTask task, int transferred, int total) {
@@ -4449,11 +4621,10 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     return 'local:${DateTime.now().microsecondsSinceEpoch}';
   }
 
-  String fileNameFor(File file) {
-    return file.uri.pathSegments.isEmpty
-        ? 'upload'
-        : file.uri.pathSegments.last;
-  }
+  String fileNameFor(XFile file) => file.name.isEmpty ? 'upload' : file.name;
+
+  String desktopFileNameFor(File file) =>
+      file.uri.pathSegments.isEmpty ? 'upload' : file.uri.pathSegments.last;
 
   ChannelMessage createOptimisticChannelAttachmentMessage({
     required File file,
@@ -4463,7 +4634,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     required String kind,
   }) {
     final fileId = createLocalAttachmentId();
-    final originalName = fileNameFor(file);
+    final originalName = desktopFileNameFor(file);
     registerLocalAttachmentSource(fileId, file, expectedSizeBytes: sizeBytes);
     pendingLocalUploads.add(fileId);
     return ChannelMessage(
@@ -4492,7 +4663,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     required String kind,
   }) {
     final fileId = createLocalAttachmentId();
-    final originalName = fileNameFor(file);
+    final originalName = desktopFileNameFor(file);
     registerLocalAttachmentSource(fileId, file, expectedSizeBytes: sizeBytes);
     pendingLocalUploads.add(fileId);
     return DirectMessage(
@@ -4582,7 +4753,9 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   }
 
   Future<void> retryUpload(TransferTask task) async {
-    if (!await task.file.exists()) {
+    try {
+      if (await task.file.length() <= 0) throw const FileSystemException();
+    } catch (_) {
       setState(() {
         task.status = TransferStatus.failed;
         task.error = '原文件不存在，无法重试';
@@ -4720,12 +4893,87 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     }
   }
 
+  Future<Uint8List> downloadAttachmentBytes(
+    ChatAttachment attachment, {
+    TransferProgress? onProgress,
+    TransferCancelToken? cancelToken,
+  }) async {
+    final auth = session;
+    final client = api;
+    if (auth == null || client == null) {
+      throw OpenSpeakException('未连接服务器');
+    }
+    if (attachment.expired) throw OpenSpeakException('文件已过期');
+    Uint8List bytes;
+    void downloadProgress(int done, int total) {
+      if (!attachment.encrypted) {
+        onProgress?.call(done, total);
+        return;
+      }
+      final ciphertextSize = attachment.ciphertextSizeBytes > 0
+          ? attachment.ciphertextSizeBytes
+          : total;
+      final plaintextSize = attachment.sizeBytes > 0
+          ? attachment.sizeBytes
+          : total;
+      final scaled = ciphertextSize <= 0
+          ? 0
+          : done * plaintextSize ~/ ciphertextSize * 4 ~/ 5;
+      onProgress?.call(scaled, plaintextSize);
+    }
+
+    bytes = attachment.direct
+        ? await client.downloadDirectFileBytes(
+            auth.token,
+            attachment.fileId,
+            onProgress: downloadProgress,
+            cancelToken: cancelToken,
+          )
+        : await client.downloadStoredFileBytes(
+            auth.token,
+            attachment.fileId,
+            onProgress: downloadProgress,
+            cancelToken: cancelToken,
+          );
+    if (!attachment.encrypted) return bytes;
+    if (attachment.attachmentFormat != attachmentEncryptionFormatV1) {
+      throw OpenSpeakException('不支持此加密附件格式');
+    }
+    final channel = attachment.direct
+        ? null
+        : channels.where((item) => item.id == attachment.channelId).firstOrNull;
+    final key = attachment.direct
+        ? directMessageKeys[attachment.epochId]
+        : channel == null
+        ? null
+        : await ensureChannelKey(channel, epochId: attachment.epochId);
+    if (key == null) throw OpenSpeakException('缺少附件解密密钥');
+    return deviceIdentity.decryptAttachmentBytes(
+      input: bytes,
+      channelKey: key,
+      channelId: attachment.channelId,
+      epochId: attachment.epochId,
+      nonce: attachment.nonce,
+      plaintextSize: attachment.sizeBytes,
+      checkCancelled: () => cancelToken?.throwIfCancelled('下载已取消'),
+      onProgress: (done, total) =>
+          onProgress?.call(total * 4 ~/ 5 + done ~/ 5, total),
+    );
+  }
+
   Future<CachedImagePreview> loadImagePreview(ChatAttachment attachment) {
     final cached = imagePreviewFutures[attachment.fileId];
     if (cached != null) return cached;
 
     final future = () async {
       try {
+        if (kIsWeb) {
+          final bytes = await downloadAttachmentBytes(attachment);
+          return CachedImagePreview(
+            bytes: bytes,
+            size: await _readImageSizeBytes(bytes),
+          );
+        }
         final file = await ensureAttachmentCached(attachment);
         final size = await _readImageSize(file);
         return CachedImagePreview(file: file, size: size);
@@ -4742,6 +4990,24 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   Future<void> openAttachment(ChatAttachment attachment) async {
     final auth = session;
     if (auth == null) return;
+    if (kIsWeb) {
+      await runDownloadTask(attachment, () async {
+        final bytes = await downloadAttachmentBytes(
+          attachment,
+          onProgress: (done, total) =>
+              updateDownloadProgress(attachment.fileId, done, total),
+          cancelToken: downloadTasks[attachment.fileId]?.cancelToken,
+        );
+        downloadBrowserBytes(
+          bytes,
+          attachment.displayName,
+          attachment.contentType.isEmpty
+              ? contentTypeForPath(attachment.displayName)
+              : attachment.contentType,
+        );
+      });
+      return;
+    }
     await runDownloadTask(attachment, () async {
       final file = await ensureAttachmentCached(
         attachment,
@@ -4756,6 +5022,10 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   Future<void> saveAttachmentAs(ChatAttachment attachment) async {
     final auth = session;
     if (auth == null) return;
+    if (kIsWeb) {
+      await openAttachment(attachment);
+      return;
+    }
     final destination = await getSaveLocation(
       suggestedName: attachment.displayName,
     );
@@ -4863,6 +5133,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   Future<AudioAttachmentMetadata> readAudioAttachmentMetadata(
     ChatAttachment attachment,
   ) async {
+    if (kIsWeb) return const AudioAttachmentMetadata();
     final localSource = localAttachmentSources[attachment.fileId];
     if (localSource != null && await localSource.exists()) {
       return readAudioAttachmentMetadataFromFile(localSource);
@@ -5070,6 +5341,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   }
 
   Future<File?> localAudioSourceFile(ChatAttachment attachment) async {
+    if (kIsWeb) return null;
     final localSource = localAttachmentSources[attachment.fileId];
     if (localSource != null && await localSource.exists()) {
       return localSource;
@@ -5083,6 +5355,26 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
 
   Future<void> prepareAudioSource(ChatAttachment attachment) async {
     activeAudioProxyId = null;
+    final previousObjectUrl = activeAudioObjectUrl;
+    activeAudioObjectUrl = null;
+    if (previousObjectUrl != null) revokeBrowserObjectUrl(previousObjectUrl);
+    if (kIsWeb) {
+      final bytes = await downloadAttachmentBytes(attachment);
+      final url = createBrowserObjectUrl(
+        bytes,
+        attachment.contentType.isEmpty
+            ? contentTypeForPath(attachment.displayName)
+            : attachment.contentType,
+      );
+      activeAudioObjectUrl = url;
+      await audioPlayer.setSourceUrl(
+        url,
+        mimeType: attachment.contentType.isEmpty
+            ? contentTypeForPath(attachment.displayName)
+            : attachment.contentType,
+      );
+      return;
+    }
     final localSource = await localAudioSourceFile(attachment);
     if (localSource != null) {
       await audioPlayer.setSourceDeviceFile(localSource.path);
@@ -5193,6 +5485,9 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   Future<void> stopAudioPlayback() async {
     audioStreamProxy.cancel(activeAudioProxyId);
     activeAudioProxyId = null;
+    final objectUrl = activeAudioObjectUrl;
+    activeAudioObjectUrl = null;
+    if (objectUrl != null) revokeBrowserObjectUrl(objectUrl);
     await audioPlayer.stop();
     if (!mounted) return;
     setState(() {
@@ -5237,7 +5532,14 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
             child: const Text('取消'),
           ),
           FilledButton(
-            onPressed: () => Navigator.pop(context, true),
+            onPressed: () {
+              if (kIsWeb) {
+                openBrowserUrl(url);
+                Navigator.pop(context, false);
+                return;
+              }
+              Navigator.pop(context, true);
+            },
             child: const Text('打开'),
           ),
         ],
@@ -5247,7 +5549,9 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   }
 
   Future<void> openSystemTarget(String target) async {
-    if (Platform.isMacOS) {
+    if (kIsWeb) {
+      openBrowserUrl(target);
+    } else if (Platform.isMacOS) {
       await Process.run('open', [target]);
     } else if (Platform.isWindows) {
       openWithWindowsShell(target);
@@ -5256,8 +5560,8 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     }
   }
 
-  bool isImageFile(File file) {
-    return isImageContent(contentTypeForPath(file.path), file.path);
+  bool isImageFile(XFile file) {
+    return isImageContent(contentTypeForPath(file.name), file.name);
   }
 
   Future<void> handleDroppedFiles(List<XFile> files) async {
@@ -5272,7 +5576,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       if (scope == ChatScope.direct && directPeer == null) {
         throw OpenSpeakException('未选择私聊对象，无法上传文件');
       }
-      final selected = <File>[];
+      final selected = <XFile>[];
       for (final item in files) {
         final file = await fileFromSelection(item);
         if (file != null) selected.add(file);
@@ -5882,7 +6186,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                 _ => OsSettingsPage(
                   icon: Icons.person_rounded,
                   title: '个人资料',
-                  subtitle: '设置本机头像、昵称与显示身份。',
+                  subtitle: kIsWeb ? '设置浏览器中使用的昵称与显示身份。' : '设置本机头像、昵称与显示身份。',
                   footer: Align(
                     alignment: Alignment.centerRight,
                     child: OsPrimaryButton(
@@ -5899,21 +6203,29 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                             ? localDisplayName
                             : profileController.text.trim(),
                         avatarFile: pendingAvatarFile ?? localAvatarFile,
-                        onChooseAvatar: () async {
-                          final selected = await openFile(
-                            acceptedTypeGroups: const [
-                              XTypeGroup(
-                                label: '头像图片',
-                                extensions: ['jpg', 'jpeg', 'png', 'gif'],
-                              ),
-                            ],
-                          );
-                          if (selected != null) {
-                            setDialogState(
-                              () => pendingAvatarFile = File(selected.path),
-                            );
-                          }
-                        },
+                        avatarUri:
+                            kIsWeb && (session?.user.avatarVersion ?? 0) > 0
+                            ? chatAvatarUriForUser(session!.user.id)
+                            : null,
+                        avatarToken: kIsWeb ? session?.token : null,
+                        onChooseAvatar: kIsWeb
+                            ? null
+                            : () async {
+                                final selected = await openFile(
+                                  acceptedTypeGroups: const [
+                                    XTypeGroup(
+                                      label: '头像图片',
+                                      extensions: ['jpg', 'jpeg', 'png', 'gif'],
+                                    ),
+                                  ],
+                                );
+                                if (selected != null) {
+                                  setDialogState(
+                                    () =>
+                                        pendingAvatarFile = File(selected.path),
+                                  );
+                                }
+                              },
                       ),
                       const SizedBox(height: 14),
                       const OsFieldLabel('本机昵称'),
@@ -6064,7 +6376,14 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     final canEditProfile =
         isOwner || currentServerPermissions.contains('server.profile.update');
     final allowedPages = isOwner
-        ? <String>['overview', 'general', 'transport', 'owner', 'permissions']
+        ? <String>[
+            'overview',
+            'general',
+            'transport',
+            'owner',
+            'permissions',
+            'web',
+          ]
         : serverSettingsPages(currentServerPermissions);
     if (allowedPages.isEmpty ||
         client == null ||
@@ -6095,6 +6414,14 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     }
     final adminPermissions = <String>{...?permissionSettings?.admin};
     final userPermissions = <String>{...?permissionSettings?.user};
+    WebSettings? webSettings;
+    if (isOwner) {
+      try {
+        webSettings = await client.getWebSettings(auth.token, server.id);
+      } catch (exception) {
+        if (mounted) setState(() => error = '$exception');
+      }
+    }
     var mediaNodes = <MediaNode>[];
     var fileNodes = <FileNode>[];
     if (allowedPages.contains('transport')) {
@@ -6112,7 +6439,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     if (!mounted) return;
 
     File? cachedServerAvatar;
-    if (settingsServer.avatarVersion > 0) {
+    if (!kIsWeb && settingsServer.avatarVersion > 0) {
       try {
         final support = await getApplicationSupportDirectory();
         cachedServerAvatar = await ensureServerAvatarCached(
@@ -6252,6 +6579,22 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     var attachmentMode = settingsServer.attachmentExternalEnabled
         ? 'external'
         : 'local';
+    var webEnabled = webSettings?.enabled ?? false;
+    var webCustomPathEnabled = webSettings?.customPathEnabled ?? true;
+    final webPathController = TextEditingController(
+      text: webSettings?.path ?? 'chat',
+    );
+    final savedWebUri = Uri.tryParse(webSettings?.accessUrl ?? '');
+    final webOrigin = savedWebUri != null && savedWebUri.host.isNotEmpty
+        ? savedWebUri.replace(path: '/', query: null, fragment: null).toString()
+        : settingsServer.tlsIdentifier.isEmpty
+        ? 'https://服务器:27412/'
+        : Uri(
+            scheme: 'https',
+            host: settingsServer.tlsIdentifier,
+            port: 27412,
+            path: '/',
+          ).toString();
     try {
       final action = await showDialog<String>(
         context: context,
@@ -6311,8 +6654,102 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                     onTap: () =>
                         setDialogState(() => selectedPage = 'permissions'),
                   ),
+                if (allowedPages.contains('web'))
+                  OsSettingsNavEntry(
+                    icon: Icons.language_rounded,
+                    label: '网页端设置',
+                    selected: selectedPage == 'web',
+                    onTap: () => setDialogState(() => selectedPage = 'web'),
+                  ),
               ],
               content: switch (selectedPage) {
+                'web' => OsSettingsPage(
+                  icon: Icons.language_rounded,
+                  title: '网页端设置',
+                  subtitle: '网页端与主服务器共用 HTTPS 端口，并沿用当前附件承载配置。',
+                  footer: Align(
+                    alignment: Alignment.centerRight,
+                    child: OsPrimaryButton(
+                      label: '保存更改',
+                      icon: Icons.check_rounded,
+                      onPressed: () => Navigator.pop(context, 'save-web'),
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      OsFormCard(
+                        icon: Icons.public_rounded,
+                        title: '网页入口',
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            SwitchListTile(
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text('启用网页端'),
+                              subtitle: const Text('关闭后网页入口不可访问，现有网页会话也会断开'),
+                              value: webEnabled,
+                              onChanged: (value) =>
+                                  setDialogState(() => webEnabled = value),
+                            ),
+                            const Divider(height: 20),
+                            SwitchListTile(
+                              contentPadding: EdgeInsets.zero,
+                              title: const Text('使用自定义访问路径'),
+                              subtitle: const Text('开启后根地址保持空白，只能通过下方路径进入'),
+                              value: webCustomPathEnabled,
+                              onChanged: (value) => setDialogState(
+                                () => webCustomPathEnabled = value,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            TextField(
+                              controller: webPathController,
+                              enabled: webCustomPathEnabled,
+                              inputFormatters: [
+                                FilteringTextInputFormatter.allow(
+                                  RegExp(r'[A-Za-z0-9_-]'),
+                                ),
+                                LengthLimitingTextInputFormatter(64),
+                              ],
+                              decoration: const InputDecoration(
+                                labelText: '自定义路径',
+                                prefixText: '/',
+                                helperText: '不能使用 api、ws 或 rtc',
+                              ),
+                              onChanged: (_) => setDialogState(() {}),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      OsFormCard(
+                        icon: Icons.link_rounded,
+                        title: '访问地址',
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            SelectableText(
+                              webCustomPathEnabled
+                                  ? '$webOrigin${webPathController.text}/'
+                                  : webOrigin,
+                              style: const TextStyle(
+                                color: OsColors.text,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            _ActivationHint(
+                              text: webSettings?.assetsAvailable == false
+                                  ? '当前服务器尚未安装网页资源，安装后才能启用。'
+                                  : '网页端自动使用“传输与安全”中的附件承载方式，不提供单独节点配置。',
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
                 'permissions' => OsServerPermissionsPage(
                   adminPermissions: adminPermissions,
                   userPermissions: userPermissions,
@@ -6974,7 +7411,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                                 settingsServer.avatarVersion,
                               )
                             : null,
-                        onChooseAvatar: canEditProfile
+                        onChooseAvatar: canEditProfile && !kIsWeb
                             ? () async {
                                 final selected = await openFile(
                                   acceptedTypeGroups: const [
@@ -7255,6 +7692,19 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
             );
             await refreshServerState();
           });
+        case 'save-web':
+          await runGuarded(() async {
+            await client.updateWebSettings(
+              auth.token,
+              server.id,
+              enabled: webEnabled,
+              customPathEnabled: webCustomPathEnabled,
+              path: webPathController.text.trim(),
+            );
+            if (mounted) {
+              setState(() => error = null);
+            }
+          });
         case null:
           return;
       }
@@ -7273,6 +7723,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       for (final controller in screenShareBitrateControllers.values) {
         controller.dispose();
       }
+      webPathController.dispose();
     }
   }
 
@@ -7356,13 +7807,16 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     final server = selectedServer;
     if (client == null || auth == null || server == null) return;
     try {
-      final status = await client.getOwnerStatus(auth.token, server.id);
+      final status = kIsWeb
+          ? OwnerStatus(claimed: true, claimAvailable: false, isOwner: false)
+          : await client.getOwnerStatus(auth.token, server.id);
       if (!mounted || selectedServer?.id != server.id) return;
       setState(() => selectedServerOwnerStatus = status);
       final items = serverMenuActions(
         claimed: status.claimed,
         isOwner: status.isOwner,
         permissions: currentServerPermissions,
+        allowPairing: !kIsWeb,
       );
       if (items.isEmpty) return;
       final overlay =
@@ -8289,16 +8743,19 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       }
       final quality = await showScreenShareQualityDialog();
       if (!mounted || quality == null) return;
-      final source = await showDialog<rtc.DesktopCapturerSource>(
-        context: context,
-        barrierColor: Colors.black.withValues(alpha: 0.72),
-        barrierDismissible: false,
-        builder: (_) => const _ScreenShareSourceDialog(),
-      );
-      if (!mounted || source == null) return;
+      rtc.DesktopCapturerSource? source;
+      if (!kIsWeb) {
+        source = await showDialog<rtc.DesktopCapturerSource>(
+          context: context,
+          barrierColor: Colors.black.withValues(alpha: 0.72),
+          barrierDismissible: false,
+          builder: (_) => const _ScreenShareSourceDialog(),
+        );
+        if (!mounted || source == null) return;
+      }
       await runGuarded(
         () => voiceSession.startScreenShare(
-          sourceId: source.id,
+          sourceId: source?.id ?? '',
           quality: quality,
         ),
       );
@@ -8325,6 +8782,11 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
 
   @override
   Widget build(BuildContext context) {
+    if (kIsWeb && MediaQuery.sizeOf(context).width < 900) {
+      return const Scaffold(
+        body: Center(child: Text('OpenSpeak 网页端暂不支持小尺寸窗口，请使用桌面浏览器并放大窗口。')),
+      );
+    }
     return Scaffold(body: buildShell());
   }
 
@@ -8360,18 +8822,21 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                     onTap: isCurrentSavedConnection(connection)
                         ? null
                         : () => unawaited(connectSavedConnection(connection)),
-                    onSecondaryTapDown: (details) => unawaited(
-                      showSavedServerContextMenu(connection, details),
-                    ),
+                    onSecondaryTapDown: kIsWeb
+                        ? null
+                        : (details) => unawaited(
+                            showSavedServerContextMenu(connection, details),
+                          ),
                   ),
-                ServerBubble(
-                  label: '+',
-                  selected: false,
-                  tooltip: '添加服务器',
-                  color: OsColors.sidebar,
-                  foregroundColor: OsColors.green,
-                  onTap: () => unawaited(showAddServerDialog()),
-                ),
+                if (!kIsWeb || savedConnections.isEmpty)
+                  ServerBubble(
+                    label: '+',
+                    selected: false,
+                    tooltip: kIsWeb ? '连接服务器' : '添加服务器',
+                    color: OsColors.sidebar,
+                    foregroundColor: OsColors.green,
+                    onTap: () => unawaited(showAddServerDialog()),
+                  ),
               ],
             ),
           ),
@@ -8516,6 +8981,10 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
               displayName: localDisplayName,
               avatarFile: localAvatarFile,
               avatarRevision: localAvatarRevision,
+              avatarUri: kIsWeb && session != null
+                  ? chatAvatarUriForUser(session!.user.id)
+                  : null,
+              avatarToken: kIsWeb ? session?.token : null,
               online: wsConnected,
               muted: voiceSession.snapshot.muted,
               canSpeak: hasServerPermission('voice.speak'),
@@ -8643,12 +9112,14 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
             ErrorBox(
               message: error!,
               actionLabel:
-                  pushToTalkHotkey.accessibilityPermissionRequired &&
+                  !kIsWeb &&
+                      pushToTalkHotkey.accessibilityPermissionRequired &&
                       Platform.isMacOS
                   ? '打开系统设置'
                   : null,
               onAction:
-                  pushToTalkHotkey.accessibilityPermissionRequired &&
+                  !kIsWeb &&
+                      pushToTalkHotkey.accessibilityPermissionRequired &&
                       Platform.isMacOS
                   ? () =>
                         unawaited(pushToTalkHotkey.openAccessibilitySettings())
@@ -10530,25 +11001,27 @@ class MicrophoneActivationCard extends StatelessWidget {
         children: [
           const OsFieldLabel('麦克风激活方式'),
           const SizedBox(height: 8),
-          MicrophoneActivationOption(
-            selected: mode == MicrophoneActivationMode.pushToTalk,
-            title: '按键通话',
-            subtitle: '按住指定快捷键时传输声音',
-            onTap: () => onModeChanged(MicrophoneActivationMode.pushToTalk),
-            expanded: mode == MicrophoneActivationMode.pushToTalk
-                ? Focus(
-                    focusNode: hotkeyFocusNode,
-                    onKeyEvent: onHotkeyEvent,
-                    child: PushToTalkHotkeyField(
-                      binding: pushToTalkHotkey,
-                      recording: recordingHotkey,
-                      onRecord: onStartHotkeyRecording,
-                      onClear: onClearHotkey,
-                    ),
-                  )
-                : null,
-          ),
-          const SizedBox(height: 7),
+          if (!kIsWeb) ...[
+            MicrophoneActivationOption(
+              selected: mode == MicrophoneActivationMode.pushToTalk,
+              title: '按键通话',
+              subtitle: '按住指定快捷键时传输声音',
+              onTap: () => onModeChanged(MicrophoneActivationMode.pushToTalk),
+              expanded: mode == MicrophoneActivationMode.pushToTalk
+                  ? Focus(
+                      focusNode: hotkeyFocusNode,
+                      onKeyEvent: onHotkeyEvent,
+                      child: PushToTalkHotkeyField(
+                        binding: pushToTalkHotkey,
+                        recording: recordingHotkey,
+                        onRecord: onStartHotkeyRecording,
+                        onClear: onClearHotkey,
+                      ),
+                    )
+                  : null,
+            ),
+            const SizedBox(height: 7),
+          ],
           MicrophoneActivationOption(
             selected: mode == MicrophoneActivationMode.continuous,
             title: '持续传输',
@@ -14801,14 +15274,18 @@ const _maxImagePreviewWidth = 420.0;
 const _maxImagePreviewHeight = 360.0;
 
 class CachedImagePreview {
-  const CachedImagePreview({required this.file, required this.size});
+  const CachedImagePreview({this.file, this.bytes, required this.size});
 
-  final File file;
+  final File? file;
+  final Uint8List? bytes;
   final Size size;
 }
 
 Future<Size> _readImageSize(File file) async {
-  final bytes = await file.readAsBytes();
+  return _readImageSizeBytes(await file.readAsBytes());
+}
+
+Future<Size> _readImageSizeBytes(Uint8List bytes) async {
   final codec = await ui.instantiateImageCodec(bytes);
   final frame = await codec.getNextFrame();
   final image = frame.image;
@@ -14956,16 +15433,29 @@ class _ImageAttachmentPreviewState extends State<ImageAttachmentPreview> {
                           child: SizedBox(
                             width: displaySize.width,
                             height: displaySize.height,
-                            child: Image.file(
-                              image.file,
-                              width: displaySize.width,
-                              height: displaySize.height,
-                              fit: BoxFit.contain,
-                              filterQuality: FilterQuality.medium,
-                              errorBuilder: (_, _, _) => ImagePreviewFailure(
-                                onSaveAs: widget.onSaveAs,
-                              ),
-                            ),
+                            child: image.bytes != null
+                                ? Image.memory(
+                                    image.bytes!,
+                                    width: displaySize.width,
+                                    height: displaySize.height,
+                                    fit: BoxFit.contain,
+                                    filterQuality: FilterQuality.medium,
+                                    errorBuilder: (_, _, _) =>
+                                        ImagePreviewFailure(
+                                          onSaveAs: widget.onSaveAs,
+                                        ),
+                                  )
+                                : Image.file(
+                                    image.file!,
+                                    width: displaySize.width,
+                                    height: displaySize.height,
+                                    fit: BoxFit.contain,
+                                    filterQuality: FilterQuality.medium,
+                                    errorBuilder: (_, _, _) =>
+                                        ImagePreviewFailure(
+                                          onSaveAs: widget.onSaveAs,
+                                        ),
+                                  ),
                           ),
                         ),
                       ),
@@ -15053,14 +15543,12 @@ class TransferTask {
   });
 
   factory TransferTask.upload({
-    required File file,
+    required XFile file,
     required bool direct,
     required String targetId,
     required bool image,
   }) {
-    final name = file.uri.pathSegments.isEmpty
-        ? 'upload'
-        : file.uri.pathSegments.last;
+    final name = file.name.isEmpty ? 'upload' : file.name;
     return TransferTask._(
       file: file,
       fileName: name,
@@ -15074,7 +15562,7 @@ class TransferTask {
 
   factory TransferTask.download({required ChatAttachment attachment}) {
     return TransferTask._(
-      file: File(''),
+      file: XFile.fromData(Uint8List(0), name: attachment.displayName),
       fileName: attachment.displayName,
       direct: attachment.direct,
       targetId: attachment.fileId,
@@ -15085,7 +15573,7 @@ class TransferTask {
     );
   }
 
-  final File file;
+  final XFile file;
   final String fileName;
   final bool direct;
   final String targetId;
@@ -15827,54 +16315,6 @@ String formatDuration(Duration value) {
   final seconds = totalSeconds % 60;
   String two(int n) => n.toString().padLeft(2, '0');
   return '$minutes:${two(seconds)}';
-}
-
-typedef _ShellExecuteWNative =
-    ffi.IntPtr Function(
-      ffi.IntPtr hwnd,
-      ffi.Pointer<native_strings.Utf16> lpOperation,
-      ffi.Pointer<native_strings.Utf16> lpFile,
-      ffi.Pointer<native_strings.Utf16> lpParameters,
-      ffi.Pointer<native_strings.Utf16> lpDirectory,
-      ffi.Uint32 nShowCmd,
-    );
-
-typedef _ShellExecuteWDart =
-    int Function(
-      int hwnd,
-      ffi.Pointer<native_strings.Utf16> lpOperation,
-      ffi.Pointer<native_strings.Utf16> lpFile,
-      ffi.Pointer<native_strings.Utf16> lpParameters,
-      ffi.Pointer<native_strings.Utf16> lpDirectory,
-      int nShowCmd,
-    );
-
-void openWithWindowsShell(String target) {
-  final shell32 = ffi.DynamicLibrary.open('shell32.dll');
-  final shellExecute = shell32
-      .lookupFunction<_ShellExecuteWNative, _ShellExecuteWDart>(
-        'ShellExecuteW',
-      );
-  final operation = 'open'.toNativeUtf16();
-  final file = target.toNativeUtf16();
-  final nullString = ffi.nullptr.cast<native_strings.Utf16>();
-  try {
-    const swShownormal = 1;
-    final result = shellExecute(
-      0,
-      operation,
-      file,
-      nullString,
-      nullString,
-      swShownormal,
-    );
-    if (result <= 32) {
-      throw OpenSpeakException('ShellExecute failed with code $result');
-    }
-  } finally {
-    native_strings.malloc.free(operation);
-    native_strings.malloc.free(file);
-  }
 }
 
 class AudioAttachmentMetadata {

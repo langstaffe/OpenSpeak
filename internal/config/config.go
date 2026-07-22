@@ -16,6 +16,7 @@ type Config struct {
 	DatabasePath                string
 	FileRoot                    string
 	DirectFileRoot              string
+	WebRoot                     string
 	JWTSecret                   string
 	JWTTTL                      time.Duration
 	DefaultHistoryRetentionDays int
@@ -69,6 +70,7 @@ func Load() (Config, error) {
 		DatabasePath:                databasePath,
 		FileRoot:                    env("OS_FILE_ROOT", "/opt/openspeak/files"),
 		DirectFileRoot:              env("OS_DIRECT_FILE_ROOT", filepath.Join(filepath.Dir(databasePath), "tmp", "direct_files")),
+		WebRoot:                     env("OS_WEB_ROOT", "/opt/openspeak/web"),
 		JWTSecret:                   os.Getenv("OS_JWT_SECRET"),
 		JWTTTL:                      time.Duration(envInt("OS_JWT_TTL_SECONDS", 86400)) * time.Second,
 		DefaultHistoryRetentionDays: envInt("OS_DEFAULT_HISTORY_RETENTION_DAYS", 30),

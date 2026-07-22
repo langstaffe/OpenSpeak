@@ -103,6 +103,7 @@ OS_ADDR=127.0.0.1:${OPENSPEAK_BACKEND_PORT}
 OS_DATABASE_PATH=${DATA_DIR}/openspeak.db
 OS_FILE_ROOT=${DATA_DIR}/files
 OS_DIRECT_FILE_ROOT=${DATA_DIR}/tmp/direct_files
+OS_WEB_ROOT=${BASE_DIR}/web
 OS_LOG_FILE=${LOG_DIR}/openspeak.log
 OS_LOG_LEVEL=info
 OS_JWT_SECRET=${jwt_secret}
@@ -164,6 +165,7 @@ ensure_tls_config() {
   append_env_if_missing OS_TLS_LIVEKIT_UPSTREAM "127.0.0.1:${LIVEKIT_SIGNAL_PORT}"
   append_env_if_missing OS_PLAIN_PUBLIC_PORT "${OPENSPEAK_PORT}"
   append_env_if_missing OS_TLS_PUBLIC_PORT "${OPENSPEAK_TLS_PORT}"
+  append_env_if_missing OS_WEB_ROOT "${BASE_DIR}/web"
   if [[ ! -f "${CADDY_CONFIG}" ]]; then
     if [[ "${configured_backend_port}" == "${OPENSPEAK_PORT}" ]]; then
       cat > "${CADDY_CONFIG}" <<EOF

@@ -34,6 +34,7 @@ type Client struct {
 	EnvelopePublicKey string
 	OwnerDeviceID     string
 	ServerID          string
+	ClientType        string
 	ConnectedAt       time.Time
 	LastSeenAt        time.Time
 	conn              *websocket.Conn
@@ -158,7 +159,7 @@ func (h *Hub) Run(ctx context.Context) {
 	}
 }
 
-func (h *Hub) Attach(conn *websocket.Conn, userID, displayName string, device DirectDevice, ownerDeviceID, serverID string) {
+func (h *Hub) Attach(conn *websocket.Conn, userID, displayName string, device DirectDevice, ownerDeviceID, serverID, clientType string) {
 	now := time.Now().UTC()
 	client := &Client{
 		UserID:            userID,
@@ -168,6 +169,7 @@ func (h *Hub) Attach(conn *websocket.Conn, userID, displayName string, device Di
 		EnvelopePublicKey: device.EnvelopePublicKey,
 		OwnerDeviceID:     ownerDeviceID,
 		ServerID:          serverID,
+		ClientType:        clientType,
 		ConnectedAt:       now,
 		LastSeenAt:        now,
 		conn:              conn,
@@ -177,6 +179,26 @@ func (h *Hub) Attach(conn *websocket.Conn, userID, displayName string, device Di
 	h.register <- client
 	go client.writeLoop()
 	client.readLoop()
+}
+
+func (h *Hub) DisconnectClientType(clientType, eventType string) {
+	h.mu.RLock()
+	targets := make([]*Client, 0)
+	for client := range h.clients {
+		if client.ClientType != clientType {
+			continue
+		}
+		targets = append(targets, client)
+		select {
+		case client.send <- stamp(Event{Type: eventType, ServerID: client.ServerID}):
+		default:
+		}
+	}
+	h.mu.RUnlock()
+	for _, client := range targets {
+		client := client
+		time.AfterFunc(50*time.Millisecond, func() { _ = client.conn.Close() })
+	}
 }
 
 func (h *Hub) OwnerDeviceOnline(serverID, ownerDeviceID string) bool {

@@ -10,6 +10,10 @@ class ClientLog {
   static String? get path => _file?.path;
 
   static Future<void> initialize({Directory? directory}) async {
+    if (kIsWeb) {
+      write('app', 'started (web)');
+      return;
+    }
     try {
       final base = directory ?? await getApplicationSupportDirectory();
       final logDirectory = Directory(
@@ -38,7 +42,7 @@ class ClientLog {
     try {
       _file?.writeAsStringSync('$line\n', mode: FileMode.append, flush: true);
     } catch (_) {}
-    if (kDebugMode) debugPrint(line);
+    if (kIsWeb || kDebugMode) debugPrint(line);
   }
 
   static void error(String area, Object error, StackTrace stackTrace) {

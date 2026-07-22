@@ -16,6 +16,8 @@ import (
 type Claims struct {
 	Subject                string `json:"sub"`
 	DisplayName            string `json:"display_name,omitempty"`
+	ClientType             string `json:"client_type,omitempty"`
+	WebGeneration          int64  `json:"web_generation,omitempty"`
 	OwnerServerID          string `json:"owner_server_id,omitempty"`
 	OwnerDeviceID          string `json:"owner_device_id,omitempty"`
 	OwnerGeneration        int64  `json:"owner_generation,omitempty"`

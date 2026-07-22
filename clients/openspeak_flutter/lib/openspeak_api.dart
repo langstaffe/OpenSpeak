@@ -1,6 +1,13 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+
+import 'package:file_selector/file_selector.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 
 typedef TransferProgress = void Function(int transferredBytes, int totalBytes);
 
@@ -18,6 +25,7 @@ bool externalAttachmentCanFallback(
 }) =>
     sizeBytes <= localMaxBytes &&
     (error is SocketException ||
+        error is http.ClientException ||
         error is HandshakeException ||
         error is HttpException ||
         (error is OpenSpeakException &&
@@ -26,7 +34,7 @@ bool externalAttachmentCanFallback(
                 error.statusCode >= 500)));
 
 bool apiConnectShouldRetry(Object error, int attempt) =>
-    error is SocketException && attempt == 0;
+    (error is SocketException || error is http.ClientException) && attempt == 0;
 
 Uri? legacyPlainDiscoveryBase(Uri currentBase) {
   if (currentBase.scheme != 'https' ||
@@ -80,12 +88,9 @@ class OpenSpeakApi {
         baseUrl.endsWith('/')
             ? baseUrl.substring(0, baseUrl.length - 1)
             : baseUrl,
-      ) {
-    _latencyClient.idleTimeout = const Duration(seconds: 10);
-  }
+      );
 
   Uri baseUri;
-  final HttpClient _latencyClient = HttpClient();
   bool _latencyConnectionWarmed = false;
 
   Uri apiUri(String path, [Map<String, String>? query]) {
@@ -107,9 +112,9 @@ class OpenSpeakApi {
   }
 
   Future<void> _healthProbe() async {
-    final request = await _latencyClient.getUrl(apiUri('/api/health'));
-    final response = await request.close();
-    await response.drain<void>();
+    final response = await http
+        .get(apiUri('/api/health'))
+        .timeout(const Duration(seconds: 5));
     if (response.statusCode < 200 || response.statusCode >= 300) {
       throw OpenSpeakException('HTTP ${response.statusCode}: health probe');
     }
@@ -128,6 +133,7 @@ class OpenSpeakApi {
         'display_name': displayName,
         'password': serverPassword,
         'client_installation_id': clientInstallationId,
+        if (kIsWeb) 'client_type': 'web',
       },
     );
     return AuthSession.fromJson(json);
@@ -286,24 +292,14 @@ class OpenSpeakApi {
       _downloadAvatar(serverAvatarUri(serverId, version));
 
   Future<Uint8List> _downloadAvatar(Uri uri, {String token = ''}) async {
-    final client = HttpClient();
-    try {
-      final request = await client.getUrl(uri);
-      if (token.isNotEmpty) {
-        request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
-      }
-      final response = await request.close();
-      final bytes = await response.fold<BytesBuilder>(
-        BytesBuilder(),
-        (builder, chunk) => builder..add(chunk),
-      );
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw OpenSpeakException('HTTP ${response.statusCode}: 无法下载头像');
-      }
-      return bytes.takeBytes();
-    } finally {
-      client.close(force: true);
+    final response = await http.get(
+      uri,
+      headers: {if (token.isNotEmpty) 'Authorization': 'Bearer $token'},
+    );
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw OpenSpeakException('HTTP ${response.statusCode}: 无法下载头像');
     }
+    return response.bodyBytes;
   }
 
   Future<Device> registerDevice(
@@ -461,6 +457,35 @@ class OpenSpeakApi {
       },
     );
     return ServerPermissionSettings.fromJson(json);
+  }
+
+  Future<WebSettings> getWebSettings(String token, String serverId) async {
+    final json = await request(
+      'GET',
+      '/api/v1/servers/$serverId/web-settings',
+      token: token,
+    );
+    return WebSettings.fromJson(json);
+  }
+
+  Future<WebSettings> updateWebSettings(
+    String token,
+    String serverId, {
+    required bool enabled,
+    required bool customPathEnabled,
+    required String path,
+  }) async {
+    final json = await request(
+      'PUT',
+      '/api/v1/servers/$serverId/web-settings',
+      token: token,
+      body: {
+        'enabled': enabled,
+        'custom_path_enabled': customPathEnabled,
+        'path': path,
+      },
+    );
+    return WebSettings.fromJson(json);
   }
 
   Future<List<AuditLogEntry>> listAuditLogs(
@@ -1247,7 +1272,7 @@ class OpenSpeakApi {
   Future<ChannelUploadResult> uploadChannelImage(
     String token,
     String channelId,
-    File file, {
+    XFile file, {
     required String encryptionMode,
     String? originalName,
     String? contentType,
@@ -1281,7 +1306,7 @@ class OpenSpeakApi {
   Future<ChannelUploadResult> uploadChannelFile(
     String token,
     String channelId,
-    File file, {
+    XFile file, {
     required String encryptionMode,
     String? originalName,
     String? contentType,
@@ -1315,7 +1340,7 @@ class OpenSpeakApi {
   Future<ChannelUploadResult> uploadChannelAttachment(
     String token,
     String channelId,
-    File file, {
+    XFile file, {
     required String endpoint,
     required String fieldName,
     required String encryptionMode,
@@ -1329,9 +1354,7 @@ class OpenSpeakApi {
     TransferProgress? onProgress,
     TransferCancelToken? cancelToken,
   }) async {
-    final fileName =
-        originalName ??
-        (file.uri.pathSegments.isEmpty ? 'upload' : file.uri.pathSegments.last);
+    final fileName = originalName ?? (file.name.isEmpty ? 'upload' : file.name);
     final uploadContentType = contentType ?? contentTypeForPath(file.path);
     final kind = endpoint == 'images' ? 'image' : 'file';
     final fileLength = await file.length();
@@ -1396,78 +1419,32 @@ class OpenSpeakApi {
         );
       }
     }
-    final client = HttpClient();
-    final boundary = 'openspeak-${DateTime.now().microsecondsSinceEpoch}';
-    try {
-      final request = await client.openUrl(
-        'POST',
-        apiUri('/api/v1/channels/$channelId/$endpoint'),
-      );
-      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
-      request.headers.set(
-        HttpHeaders.contentTypeHeader,
-        'multipart/form-data; boundary=$boundary',
-      );
-      final originalNameField =
-          '--$boundary\r\n'
-          'Content-Disposition: form-data; name="original_name"\r\n\r\n'
-          '$fileName\r\n';
-      final encryptionModeField =
-          '--$boundary\r\n'
-          'Content-Disposition: form-data; name="encryption_mode"\r\n\r\n'
-          '$encryptionMode\r\n';
-      final encryptionFields =
-          '--$boundary\r\nContent-Disposition: form-data; name="epoch_id"\r\n\r\n$epochId\r\n'
-          '--$boundary\r\nContent-Disposition: form-data; name="nonce"\r\n\r\n$nonce\r\n'
-          '--$boundary\r\nContent-Disposition: form-data; name="plaintext_size_bytes"\r\n\r\n$plaintextSizeBytes\r\n'
-          '--$boundary\r\nContent-Disposition: form-data; name="attachment_format"\r\n\r\n$attachmentFormat\r\n'
-          '--$boundary\r\nContent-Disposition: form-data; name="chunk_size"\r\n\r\n$chunkSize\r\n';
-      final fileHeader =
-          '--$boundary\r\n'
-          'Content-Disposition: form-data; name="$fieldName"; filename="${multipartFallbackFileName(fileName)}"\r\n'
-          'Content-Type: $uploadContentType\r\n\r\n';
-      const multipartFooterPrefix = '\r\n';
-      final multipartFooter = '$multipartFooterPrefix--$boundary--\r\n';
-      request.contentLength =
-          utf8.encode(originalNameField).length +
-          utf8.encode(encryptionModeField).length +
-          utf8.encode(encryptionFields).length +
-          utf8.encode(fileHeader).length +
-          fileLength +
-          utf8.encode(multipartFooter).length;
-      void writeAscii(String value) => request.add(utf8.encode(value));
-
-      writeAscii(originalNameField);
-      writeAscii(encryptionModeField);
-      writeAscii(encryptionFields);
-      writeAscii(fileHeader);
-      await addFileWithProgress(
-        request,
-        file,
-        onProgress: onProgress,
-        cancelToken: cancelToken,
-        cancelMessage: '上传已取消',
-      );
-      writeAscii(multipartFooter);
-
-      final response = await request.close();
-      final responseBody = await response.transform(utf8.decoder).join();
-      final decoded = responseBody.isEmpty ? null : jsonDecode(responseBody);
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw apiException(response.statusCode, decoded, responseBody);
-      }
-      return ChannelUploadResult.fromJson(
-        (decoded as Map).cast<String, dynamic>(),
-      );
-    } finally {
-      client.close(force: true);
-    }
+    final decoded = await _sendMultipart(
+      apiUri('/api/v1/channels/$channelId/$endpoint'),
+      token: token,
+      file: file,
+      fieldName: fieldName,
+      fileName: fileName,
+      fields: {
+        'original_name': fileName,
+        'encryption_mode': encryptionMode,
+        'epoch_id': epochId,
+        'nonce': nonce,
+        'plaintext_size_bytes': '$plaintextSizeBytes',
+        'attachment_format': attachmentFormat,
+        'chunk_size': '$chunkSize',
+      },
+      contentType: uploadContentType,
+      onProgress: onProgress,
+      cancelToken: cancelToken,
+    );
+    return ChannelUploadResult.fromJson(decoded);
   }
 
   Future<DirectFile> uploadDirectFile(
     String token,
     String toUserId,
-    File file, {
+    XFile file, {
     String? originalName,
     String? contentType,
     String encryptionMode = 'none',
@@ -1481,9 +1458,7 @@ class OpenSpeakApi {
     TransferProgress? onProgress,
     TransferCancelToken? cancelToken,
   }) async {
-    final fileName =
-        originalName ??
-        (file.uri.pathSegments.isEmpty ? 'upload' : file.uri.pathSegments.last);
+    final fileName = originalName ?? (file.name.isEmpty ? 'upload' : file.name);
     final uploadContentType = contentType ?? contentTypeForPath(file.path);
     final kind = uploadContentType.startsWith('image/') ? 'image' : 'file';
     final fileLength = await file.length();
@@ -1548,72 +1523,29 @@ class OpenSpeakApi {
         return DirectFile.fromJson((completed as Map).cast<String, dynamic>());
       }
     }
-    final client = HttpClient();
-    final boundary = 'openspeak-${DateTime.now().microsecondsSinceEpoch}';
-    try {
-      final request = await client.openUrl(
-        'POST',
-        apiUri('/api/v1/direct-files'),
-      );
-      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
-      request.headers.set(
-        HttpHeaders.contentTypeHeader,
-        'multipart/form-data; boundary=$boundary',
-      );
-      final toUserField =
-          '--$boundary\r\n'
-          'Content-Disposition: form-data; name="to_user_id"\r\n\r\n'
-          '$toUserId\r\n';
-      final originalNameField =
-          '--$boundary\r\n'
-          'Content-Disposition: form-data; name="original_name"\r\n\r\n'
-          '$fileName\r\n';
-      final encryptionFields =
-          '--$boundary\r\nContent-Disposition: form-data; name="encryption_mode"\r\n\r\n$encryptionMode\r\n'
-          '--$boundary\r\nContent-Disposition: form-data; name="message_id"\r\n\r\n$messageId\r\n'
-          '--$boundary\r\nContent-Disposition: form-data; name="sender_device_id"\r\n\r\n$senderDeviceId\r\n'
-          '--$boundary\r\nContent-Disposition: form-data; name="nonce"\r\n\r\n$nonce\r\n'
-          '--$boundary\r\nContent-Disposition: form-data; name="plaintext_size_bytes"\r\n\r\n$plaintextSizeBytes\r\n'
-          '--$boundary\r\nContent-Disposition: form-data; name="attachment_format"\r\n\r\n$attachmentFormat\r\n'
-          '--$boundary\r\nContent-Disposition: form-data; name="chunk_size"\r\n\r\n$chunkSize\r\n'
-          '--$boundary\r\nContent-Disposition: form-data; name="envelopes"\r\n\r\n${jsonEncode(directEnvelopes)}\r\n';
-      final fileHeader =
-          '--$boundary\r\n'
-          'Content-Disposition: form-data; name="file"; filename="${multipartFallbackFileName(fileName)}"\r\n'
-          'Content-Type: $uploadContentType\r\n\r\n';
-      final multipartFooter = '\r\n--$boundary--\r\n';
-      request.contentLength =
-          utf8.encode(toUserField).length +
-          utf8.encode(originalNameField).length +
-          utf8.encode(encryptionFields).length +
-          utf8.encode(fileHeader).length +
-          fileLength +
-          utf8.encode(multipartFooter).length;
-      void writeAscii(String value) => request.add(utf8.encode(value));
-
-      writeAscii(toUserField);
-      writeAscii(originalNameField);
-      writeAscii(encryptionFields);
-      writeAscii(fileHeader);
-      await addFileWithProgress(
-        request,
-        file,
-        onProgress: onProgress,
-        cancelToken: cancelToken,
-        cancelMessage: '上传已取消',
-      );
-      writeAscii(multipartFooter);
-
-      final response = await request.close();
-      final responseBody = await response.transform(utf8.decoder).join();
-      final decoded = responseBody.isEmpty ? null : jsonDecode(responseBody);
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw apiException(response.statusCode, decoded, responseBody);
-      }
-      return DirectFile.fromJson((decoded as Map).cast<String, dynamic>());
-    } finally {
-      client.close(force: true);
-    }
+    final decoded = await _sendMultipart(
+      apiUri('/api/v1/direct-files'),
+      token: token,
+      file: file,
+      fieldName: 'file',
+      fileName: fileName,
+      fields: {
+        'to_user_id': toUserId,
+        'original_name': fileName,
+        'encryption_mode': encryptionMode,
+        'message_id': messageId,
+        'sender_device_id': senderDeviceId,
+        'nonce': nonce,
+        'plaintext_size_bytes': '$plaintextSizeBytes',
+        'attachment_format': attachmentFormat,
+        'chunk_size': '$chunkSize',
+        'envelopes': jsonEncode(directEnvelopes),
+      },
+      contentType: uploadContentType,
+      onProgress: onProgress,
+      cancelToken: cancelToken,
+    );
+    return DirectFile.fromJson(decoded);
   }
 
   Future<AttachmentUploadPlan> initiateAttachmentUpload(
@@ -1621,7 +1553,7 @@ class OpenSpeakApi {
     String? channelId,
     String? toUserId,
     required String kind,
-    required File file,
+    required XFile file,
     required String originalName,
     String? contentType,
     String? encryptionMode,
@@ -1661,37 +1593,78 @@ class OpenSpeakApi {
 
   Future<void> uploadExternalAttachment(
     AttachmentUploadPlan plan,
-    File file, {
+    XFile file, {
     TransferProgress? onProgress,
     TransferCancelToken? cancelToken,
     String? contentType,
   }) async {
-    final client = HttpClient();
+    final client = http.Client();
     try {
-      final request = await client.openUrl('PUT', Uri.parse(plan.uploadUrl));
-      request.headers.set(
-        HttpHeaders.contentTypeHeader,
-        contentType ?? contentTypeForPath(file.path),
-      );
-      request.contentLength = await file.length();
-      await addFileWithProgress(
-        request,
-        file,
-        onProgress: onProgress,
-        cancelToken: cancelToken,
-        cancelMessage: '上传已取消',
-      );
-      final response = await request.close();
-      final body = await response.transform(utf8.decoder).join();
+      final length = await file.length();
+      final request = http.StreamedRequest('PUT', Uri.parse(plan.uploadUrl))
+        ..contentLength = length
+        ..headers['Content-Type'] =
+            contentType ?? contentTypeForPath(file.path);
+      final responseFuture = client.send(request);
+      var sent = 0;
+      onProgress?.call(0, length);
+      await for (final chunk in file.openRead()) {
+        cancelToken?.throwIfCancelled('上传已取消');
+        request.sink.add(chunk);
+        sent += chunk.length;
+        onProgress?.call(sent, length);
+      }
+      await request.sink.close();
+      final response = await http.Response.fromStream(await responseFuture);
       if (response.statusCode < 200 || response.statusCode >= 300) {
         throw OpenSpeakException(
-          '外部文件节点 HTTP ${response.statusCode}: $body',
+          '外部文件节点 HTTP ${response.statusCode}: ${response.body}',
           statusCode: response.statusCode,
         );
       }
     } finally {
-      client.close(force: true);
+      client.close();
     }
+  }
+
+  Future<Map<String, dynamic>> _sendMultipart(
+    Uri uri, {
+    required String token,
+    required XFile file,
+    required String fieldName,
+    required String fileName,
+    required Map<String, String> fields,
+    required String contentType,
+    TransferProgress? onProgress,
+    TransferCancelToken? cancelToken,
+  }) async {
+    final length = await file.length();
+    var sent = 0;
+    final stream = file.openRead().map((chunk) {
+      cancelToken?.throwIfCancelled('上传已取消');
+      sent += chunk.length;
+      onProgress?.call(sent, length);
+      return chunk;
+    });
+    final request = http.MultipartRequest('POST', uri)
+      ..headers['Authorization'] = 'Bearer $token'
+      ..fields.addAll(fields)
+      ..files.add(
+        http.MultipartFile(
+          fieldName,
+          stream,
+          length,
+          filename: multipartFallbackFileName(fileName),
+          contentType: MediaType.parse(contentType),
+        ),
+      );
+    onProgress?.call(0, length);
+    final response = await http.Response.fromStream(await request.send());
+    final decoded = response.body.isEmpty ? null : jsonDecode(response.body);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw apiException(response.statusCode, decoded, response.body);
+    }
+    return (decoded as Map).cast<String, dynamic>();
   }
 
   Future<File> downloadDirectFile(
@@ -1710,6 +1683,18 @@ class OpenSpeakApi {
     );
   }
 
+  Future<Uint8List> downloadDirectFileBytes(
+    String token,
+    String fileId, {
+    TransferProgress? onProgress,
+    TransferCancelToken? cancelToken,
+  }) => downloadFileBytes(
+    token,
+    '/api/v1/direct-files/$fileId/download',
+    onProgress: onProgress,
+    cancelToken: cancelToken,
+  );
+
   Future<File> downloadStoredFile(
     String token,
     String fileId,
@@ -1724,6 +1709,50 @@ class OpenSpeakApi {
       onProgress: onProgress,
       cancelToken: cancelToken,
     );
+  }
+
+  Future<Uint8List> downloadStoredFileBytes(
+    String token,
+    String fileId, {
+    TransferProgress? onProgress,
+    TransferCancelToken? cancelToken,
+  }) => downloadFileBytes(
+    token,
+    '/api/v1/files/$fileId/download',
+    onProgress: onProgress,
+    cancelToken: cancelToken,
+  );
+
+  Future<Uint8List> downloadFileBytes(
+    String token,
+    String path, {
+    TransferProgress? onProgress,
+    TransferCancelToken? cancelToken,
+  }) async {
+    final client = http.Client();
+    try {
+      final request = http.Request('GET', apiUri(path))
+        ..headers['Authorization'] = 'Bearer $token';
+      final response = await client.send(request);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        final body = await response.stream.bytesToString();
+        final decoded = body.isEmpty ? null : jsonDecode(body);
+        throw apiException(response.statusCode, decoded, body);
+      }
+      final total = response.contentLength ?? 0;
+      final bytes = BytesBuilder(copy: false);
+      var transferred = 0;
+      onProgress?.call(0, total);
+      await for (final chunk in response.stream) {
+        cancelToken?.throwIfCancelled('下载已取消');
+        bytes.add(chunk);
+        transferred += chunk.length;
+        onProgress?.call(transferred, total);
+      }
+      return bytes.takeBytes();
+    } finally {
+      client.close();
+    }
   }
 
   Future<File> downloadFile(
@@ -1822,40 +1851,35 @@ class OpenSpeakApi {
   }) async {
     Object? lastError;
     for (var attempt = 0; attempt < 2; attempt += 1) {
-      final client = HttpClient();
       try {
-        final request = await client.openUrl('GET', apiUri(path));
-        request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
-        request.headers.set(
-          HttpHeaders.rangeHeader,
-          'bytes=$start-$endInclusive',
+        final response = await http.get(
+          apiUri(path),
+          headers: {
+            'Authorization': 'Bearer $token',
+            'Range': 'bytes=$start-$endInclusive',
+          },
         );
-        final response = await request.close();
         if (response.statusCode != httpStatusPartialContent) {
-          await response.drain<void>();
           throw OpenSpeakException('range request was not honored');
         }
-        final builder = BytesBuilder(copy: false);
-        await for (final chunk in response) {
-          builder.add(chunk);
+        return response.bodyBytes;
+      } on Object catch (error) {
+        if (error is! SocketException && error is! http.ClientException) {
+          rethrow;
         }
-        return builder.takeBytes();
-      } on SocketException catch (error) {
         lastError = error;
         if (attempt == 1) rethrow;
         await Future<void>.delayed(const Duration(milliseconds: 250));
-      } finally {
-        client.close(force: true);
       }
     }
     throw lastError ?? OpenSpeakException('range request failed');
   }
 
-  Future<WebSocket> openWebSocket(
+  Future<OpenSpeakSocket> openWebSocket(
     String token,
     String deviceId,
     String serverId,
-  ) {
+  ) async {
     final scheme = baseUri.scheme == 'https' ? 'wss' : 'ws';
     final uri = baseUri.replace(
       scheme: scheme,
@@ -1866,7 +1890,9 @@ class OpenSpeakApi {
         'server_id': serverId,
       },
     );
-    return WebSocket.connect(uri.toString());
+    final channel = WebSocketChannel.connect(uri);
+    await channel.ready;
+    return OpenSpeakSocket(channel);
   }
 
   Future<dynamic> request(
@@ -1881,27 +1907,27 @@ class OpenSpeakApi {
     var connectAttempt = 0;
     var canonicalRetried = false;
     while (true) {
-      final client = HttpClient()
-        ..connectionTimeout = const Duration(seconds: 5);
+      final client = http.Client();
       try {
-        late final HttpClientRequest request;
+        late final http.Response response;
         try {
-          request = await client.openUrl(method, requestUri);
+          final request = http.Request(method, requestUri)
+            ..headers['Content-Type'] = 'application/json';
+          if (token != null) {
+            request.headers['Authorization'] = 'Bearer $token';
+          }
+          if (body != null) request.body = jsonEncode(body);
+          final streamed = await client
+              .send(request)
+              .timeout(const Duration(seconds: 15));
+          response = await http.Response.fromStream(streamed);
         } catch (error) {
           if (!apiConnectShouldRetry(error, connectAttempt)) rethrow;
           connectAttempt += 1;
           await Future<void>.delayed(const Duration(milliseconds: 250));
           continue;
         }
-        request.headers.contentType = ContentType.json;
-        if (token != null) {
-          request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
-        }
-        if (body != null) {
-          request.write(jsonEncode(body));
-        }
-        final response = await request.close();
-        final responseBody = await response.transform(utf8.decoder).join();
+        final responseBody = response.body;
         final decoded = responseBody.isEmpty ? null : jsonDecode(responseBody);
         if (response.statusCode < 200 || response.statusCode >= 300) {
           final retryBase = canonicalRetried || !retryCanonicalAddress
@@ -1919,10 +1945,38 @@ class OpenSpeakApi {
         }
         return decoded;
       } finally {
-        client.close(force: true);
+        client.close();
       }
     }
   }
+}
+
+class OpenSpeakSocket extends Stream<dynamic> {
+  OpenSpeakSocket(this._channel);
+
+  final WebSocketChannel _channel;
+
+  int? get closeCode => _channel.closeCode;
+  String? get closeReason => _channel.closeReason;
+
+  void add(Object? value) => _channel.sink.add(value);
+
+  Future<void> close() async {
+    await _channel.sink.close();
+  }
+
+  @override
+  StreamSubscription<dynamic> listen(
+    void Function(dynamic event)? onData, {
+    Function? onError,
+    void Function()? onDone,
+    bool? cancelOnError,
+  }) => _channel.stream.listen(
+    onData,
+    onError: onError,
+    onDone: onDone,
+    cancelOnError: cancelOnError,
+  );
 }
 
 OpenSpeakException apiException(
@@ -3073,6 +3127,30 @@ class ServerPermissionSettings {
   }
 }
 
+class WebSettings {
+  const WebSettings({
+    required this.enabled,
+    required this.customPathEnabled,
+    required this.path,
+    required this.assetsAvailable,
+    required this.accessUrl,
+  });
+
+  final bool enabled;
+  final bool customPathEnabled;
+  final String path;
+  final bool assetsAvailable;
+  final String accessUrl;
+
+  factory WebSettings.fromJson(Map<String, dynamic> json) => WebSettings(
+    enabled: json['enabled'] as bool? ?? false,
+    customPathEnabled: json['custom_path_enabled'] as bool? ?? true,
+    path: json['path'] as String? ?? 'chat',
+    assetsAvailable: json['assets_available'] as bool? ?? false,
+    accessUrl: json['access_url'] as String? ?? '',
+  );
+}
+
 class PresenceDevice {
   PresenceDevice({required this.deviceId});
   final String deviceId;
@@ -3297,25 +3375,6 @@ class RealtimeEvent {
       payload: (json['payload'] as Map?)?.cast<String, dynamic>() ?? {},
       sentAt: DateTime.tryParse(json['sent_at'] as String? ?? ''),
     );
-  }
-}
-
-Future<void> addFileWithProgress(
-  HttpClientRequest request,
-  File file, {
-  TransferProgress? onProgress,
-  TransferCancelToken? cancelToken,
-  required String cancelMessage,
-}) async {
-  final total = await file.length();
-  var transferred = 0;
-  onProgress?.call(0, total);
-  await for (final chunk in file.openRead()) {
-    cancelToken?.throwIfCancelled(cancelMessage);
-    request.add(chunk);
-    await request.flush();
-    transferred += chunk.length;
-    onProgress?.call(transferred, total);
   }
 }
 

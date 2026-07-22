@@ -238,4 +238,49 @@ void main() {
       throwsA(anything),
     );
   });
+
+  test('attachment bytes use the same authenticated chunk format', () async {
+    FlutterSecureStorage.setMockInitialValues({});
+    final service = DeviceIdentityService();
+    final key = await service.newChannelKey();
+    final clear = Uint8List.fromList(
+      List<int>.generate(
+        attachmentEncryptionChunkSize + 37,
+        (index) => index % 251,
+      ),
+    );
+    final encrypted = await service.encryptAttachmentBytes(
+      input: clear,
+      channelKey: key,
+      channelId: 'chn_web',
+      epochId: 'epc_web',
+    );
+    expect(
+      encrypted.bytes.length,
+      attachmentEncryptionHeaderSize + clear.length + 2 * 16,
+    );
+    expect(
+      await service.decryptAttachmentBytes(
+        input: encrypted.bytes,
+        channelKey: key,
+        channelId: 'chn_web',
+        epochId: 'epc_web',
+        nonce: encrypted.nonce,
+        plaintextSize: clear.length,
+      ),
+      clear,
+    );
+    final tampered = Uint8List.fromList(encrypted.bytes)..last ^= 1;
+    await expectLater(
+      service.decryptAttachmentBytes(
+        input: tampered,
+        channelKey: key,
+        channelId: 'chn_web',
+        epochId: 'epc_web',
+        nonce: encrypted.nonce,
+        plaintextSize: clear.length,
+      ),
+      throwsA(anything),
+    );
+  });
 }

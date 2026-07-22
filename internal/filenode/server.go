@@ -44,6 +44,22 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
+	if r.Header.Get("Origin") != "" {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Range")
+		w.Header().Set("Access-Control-Expose-Headers", "Accept-Ranges, Content-Length, Content-Range, X-OpenSpeak-SHA256")
+	}
+	if r.Method == http.MethodOptions {
+		method := map[string]string{"put": http.MethodPut, "get": http.MethodGet, "delete": http.MethodDelete}[ticket.Operation]
+		if method == "" {
+			http.Error(w, "ticket operation mismatch", http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Access-Control-Allow-Methods", method+", OPTIONS")
+		w.Header().Set("Access-Control-Max-Age", "600")
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	path := filepath.Join(s.Root, key)
 	switch {
 	case r.Method == http.MethodPut && ticket.Operation == "put":

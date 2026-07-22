@@ -48,6 +48,18 @@ class AttachmentEncryptionResult {
   final int ciphertextSize;
 }
 
+class AttachmentEncryptionBytesResult {
+  AttachmentEncryptionBytesResult({
+    required this.bytes,
+    required this.nonce,
+    required this.plaintextSize,
+  });
+
+  final Uint8List bytes;
+  final String nonce;
+  final int plaintextSize;
+}
+
 class DeviceIdentityService {
   static const _storage = FlutterSecureStorage(
     aOptions: AndroidOptions(encryptedSharedPreferences: true),
@@ -337,6 +349,46 @@ class DeviceIdentityService {
     );
   }
 
+  Future<AttachmentEncryptionBytesResult> encryptAttachmentBytes({
+    required Uint8List input,
+    required SecretKey channelKey,
+    required String channelId,
+    required String epochId,
+    void Function(int processed, int total)? onProgress,
+    void Function()? checkCancelled,
+  }) async {
+    if (input.isEmpty) throw const FormatException('attachment is empty');
+    final noncePrefix = Uint8List.fromList(_randomBytes(8));
+    final header = ByteData(attachmentEncryptionHeaderSize)
+      ..buffer.asUint8List().setRange(0, 8, _attachmentMagic)
+      ..setUint32(8, attachmentEncryptionChunkSize, Endian.big)
+      ..setUint64(12, input.length, Endian.big)
+      ..buffer.asUint8List().setRange(20, 28, noncePrefix);
+    final output = BytesBuilder(copy: false)..add(header.buffer.asUint8List());
+    var processed = 0;
+    var index = 0;
+    while (processed < input.length) {
+      checkCancelled?.call();
+      final end = min(processed + attachmentEncryptionChunkSize, input.length);
+      final box = await _cipher.encrypt(
+        input.sublist(processed, end),
+        secretKey: channelKey,
+        nonce: _attachmentNonce(noncePrefix, index),
+        aad: _attachmentContext(channelId, epochId, input.length, index),
+      );
+      output.add(box.cipherText);
+      output.add(box.mac.bytes);
+      processed = end;
+      index += 1;
+      onProgress?.call(processed, input.length);
+    }
+    return AttachmentEncryptionBytesResult(
+      bytes: output.takeBytes(),
+      nonce: _encode(noncePrefix),
+      plaintextSize: input.length,
+    );
+  }
+
   Future<File> decryptAttachmentFile({
     required File input,
     required File output,
@@ -394,6 +446,59 @@ class DeviceIdentityService {
     await source.close();
     await destination.close();
     return output;
+  }
+
+  Future<Uint8List> decryptAttachmentBytes({
+    required Uint8List input,
+    required SecretKey channelKey,
+    required String channelId,
+    required String epochId,
+    required String nonce,
+    required int plaintextSize,
+    void Function(int processed, int total)? onProgress,
+    void Function()? checkCancelled,
+  }) async {
+    if (input.length < attachmentEncryptionHeaderSize) {
+      throw const FormatException('attachment truncated');
+    }
+    final header = _parseAttachmentHeader(
+      input.sublist(0, attachmentEncryptionHeaderSize),
+      nonce: nonce,
+      plaintextSize: plaintextSize,
+    );
+    final output = BytesBuilder(copy: false);
+    var processed = 0;
+    var offset = attachmentEncryptionHeaderSize;
+    var index = 0;
+    while (processed < header.plaintextSize) {
+      checkCancelled?.call();
+      final clearLength = min(
+        header.chunkSize,
+        header.plaintextSize - processed,
+      );
+      final encryptedEnd = offset + clearLength + 16;
+      if (encryptedEnd > input.length) {
+        throw const FormatException('attachment truncated');
+      }
+      output.add(
+        await _decryptAttachmentChunk(
+          input.sublist(offset, encryptedEnd),
+          channelKey: channelKey,
+          channelId: channelId,
+          epochId: epochId,
+          header: header,
+          index: index,
+        ),
+      );
+      offset = encryptedEnd;
+      processed += clearLength;
+      index += 1;
+      onProgress?.call(processed, header.plaintextSize);
+    }
+    if (offset != input.length) {
+      throw const FormatException('invalid attachment length');
+    }
+    return output.takeBytes();
   }
 
   Future<Uint8List> decryptAttachmentRange({

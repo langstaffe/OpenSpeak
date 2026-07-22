@@ -44,6 +44,9 @@ dependencies:
   ffi: ^2.2.0
   cryptography: ^2.7.0
   flutter_secure_storage: ^9.2.4
+  http: ^1.6.0
+  http_parser: ^4.1.2
+  web_socket_channel: ^3.0.3
 dev_dependencies:
   flutter_test:
     sdk: flutter

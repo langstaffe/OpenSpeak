@@ -111,6 +111,8 @@ type Repository interface {
 	ConsumeOwnerPairingToken(ctx context.Context, serverID, tokenHash string, device store.OwnerDevice) (store.OwnerSecurity, store.OwnerDevice, error)
 	KickOwnerDevice(ctx context.Context, serverID, deviceID string) (store.OwnerDevice, error)
 	RevokeOwnerDevice(ctx context.Context, serverID, deviceID string) error
+	GetWebSettings(ctx context.Context) (store.WebSettings, error)
+	UpdateWebSettings(ctx context.Context, enabled, customPathEnabled bool, path string) (store.WebSettings, error)
 }
 
 func (s *Server) RunOwnerCredentialMonitor(ctx context.Context) {
@@ -307,7 +309,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(path, "/api/v1/"):
 		s.handleAPI(w, r)
 	default:
-		writeError(w, http.StatusNotFound, "not_found", "route not found")
+		if !s.serveWeb(w, r) {
+			w.WriteHeader(http.StatusNotFound)
+		}
 	}
 }
 
@@ -399,6 +403,7 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request, parts []stri
 			DisplayName          string `json:"display_name"`
 			Password             string `json:"password"`
 			ClientInstallationID string `json:"client_installation_id"`
+			ClientType           string `json:"client_type"`
 		}
 		if !decodeJSON(w, r, &req) {
 			return
@@ -418,6 +423,24 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request, parts []stri
 			return
 		}
 		server := servers[0]
+		clientType := strings.ToLower(strings.TrimSpace(req.ClientType))
+		if clientType != "" && clientType != "web" {
+			writeError(w, http.StatusBadRequest, "invalid_client_type", "client_type must be web when provided")
+			return
+		}
+		var webGeneration int64
+		if clientType == "web" {
+			settings, err := s.repo.GetWebSettings(r.Context())
+			if err != nil {
+				writeResult(w, nil, err)
+				return
+			}
+			if !settings.Enabled {
+				writeError(w, http.StatusForbidden, "web_disabled", "网页端未启用")
+				return
+			}
+			webGeneration = settings.Generation
+		}
 		if server.PasswordProtected {
 			passwordHash, err := s.repo.GetServerPasswordHash(r.Context(), server.ID)
 			if err != nil {
@@ -483,16 +506,18 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request, parts []stri
 			writeResult(w, nil, err)
 			return
 		}
-		s.writeAuthToken(w, user)
+		s.writeAuthToken(w, user, clientType, webGeneration)
 	default:
 		writeError(w, http.StatusNotFound, "not_found", "route not found")
 	}
 }
 
-func (s *Server) writeAuthToken(w http.ResponseWriter, user store.User) {
+func (s *Server) writeAuthToken(w http.ResponseWriter, user store.User, clientType string, webGeneration int64) {
 	token, expiresAt, err := auth.CreateToken(s.cfg.JWTSecret, auth.Claims{
-		Subject:     user.ID,
-		DisplayName: user.DisplayName,
+		Subject:       user.ID,
+		DisplayName:   user.DisplayName,
+		ClientType:    clientType,
+		WebGeneration: webGeneration,
 	}, s.cfg.JWTTTL)
 	if err != nil {
 		writeResult(w, nil, err)
@@ -683,7 +708,16 @@ func (s *Server) handleServers(w http.ResponseWriter, r *http.Request, authCtx a
 	}
 
 	if len(parts) >= 2 && parts[1] == "owner" {
+		if authCtx.Claims.ClientType == "web" {
+			writeError(w, http.StatusForbidden, "owner_unavailable_on_web", "网页端不提供服务器所有者权限")
+			return
+		}
 		s.handleOwner(w, r, authCtx, parts[0], parts[2:])
+		return
+	}
+
+	if len(parts) == 2 && parts[1] == "web-settings" {
+		s.handleWebSettings(w, r, authCtx, parts[0])
 		return
 	}
 
@@ -3221,7 +3255,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		ID: registeredDevice.ID, UserID: registeredDevice.UserID,
 		IdentityPublicKey: registeredDevice.IdentityPublicKey,
 		EnvelopePublicKey: registeredDevice.EnvelopePublicKey,
-	}, authCtx.Claims.OwnerDeviceID, serverID)
+	}, authCtx.Claims.OwnerDeviceID, serverID, authCtx.Claims.ClientType)
 }
 
 func (s *Server) requireAuth(w http.ResponseWriter, r *http.Request) (authContext, bool) {
@@ -3242,11 +3276,20 @@ func (s *Server) authFromRequest(r *http.Request) (authContext, bool) {
 	if err != nil {
 		return authContext{}, false
 	}
+	if claims.ClientType == "web" {
+		settings, settingsErr := s.repo.GetWebSettings(r.Context())
+		if settingsErr != nil || !settings.Enabled || settings.Generation != claims.WebGeneration {
+			return authContext{}, false
+		}
+	}
 	user, err := s.repo.GetUser(r.Context(), claims.Subject)
 	if err != nil {
 		return authContext{}, false
 	}
 	if security, ownerErr := s.repo.FindOwnerSecurityByUser(r.Context(), user.ID); ownerErr == nil {
+		if claims.ClientType == "web" {
+			return authContext{}, false
+		}
 		if !security.Claimed {
 			// Recovery revokes every owner token, but the owner user still needs
 			// an ordinary login session to use the new one-time claim key.

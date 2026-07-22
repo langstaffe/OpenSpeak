@@ -442,6 +442,37 @@ func (s *SQLite) GetMessageRetractWindowMinutes(ctx context.Context, serverID st
 	return minutes, err
 }
 
+func (s *SQLite) GetWebSettings(ctx context.Context) (WebSettings, error) {
+	var settings WebSettings
+	var enabled, customPathEnabled int
+	var updatedAt string
+	err := s.db.QueryRowContext(ctx, `
+		SELECT web_enabled, web_custom_path_enabled, web_path, web_session_generation, updated_at
+		FROM instance_settings WHERE id = 1
+	`).Scan(&enabled, &customPathEnabled, &settings.Path, &settings.Generation, &updatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return WebSettings{}, ErrNotFound
+	}
+	settings.Enabled = enabled != 0
+	settings.CustomPathEnabled = customPathEnabled != 0
+	settings.UpdatedAt = parseDBTime(updatedAt)
+	return settings, err
+}
+
+func (s *SQLite) UpdateWebSettings(ctx context.Context, enabled, customPathEnabled bool, path string) (WebSettings, error) {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE instance_settings
+		SET web_enabled = ?, web_custom_path_enabled = ?, web_path = ?,
+			web_session_generation = web_session_generation + 1,
+			updated_at = CURRENT_TIMESTAMP
+		WHERE id = 1
+	`, enabled, customPathEnabled, path)
+	if err != nil {
+		return WebSettings{}, err
+	}
+	return s.GetWebSettings(ctx)
+}
+
 func (s *SQLite) SetMessageRetractWindowMinutes(ctx context.Context, serverID string, minutes int) error {
 	result, err := s.db.ExecContext(ctx, `UPDATE os_servers SET message_retract_window_minutes = ? WHERE id = ?`, minutes, serverID)
 	if err != nil {

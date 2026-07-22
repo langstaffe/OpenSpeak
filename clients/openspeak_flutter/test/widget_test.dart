@@ -5,10 +5,12 @@ import 'dart:typed_data';
 import 'dart:ui' show PointerDeviceKind;
 
 import 'package:flutter/gestures.dart' show kSecondaryMouseButton;
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart' as rtc;
+import 'package:http/http.dart' as http;
 import 'package:livekit_client/livekit_client.dart' as lk;
 import 'package:openspeak_flutter/client_log.dart';
 import 'package:openspeak_flutter/device_identity_service.dart';
@@ -268,13 +270,13 @@ void main() {
   testWidgets('upload queue shows every queued file', (tester) async {
     final tasks = [
       TransferTask.upload(
-        file: File('/tmp/first.png'),
+        file: XFile('/tmp/first.png'),
         direct: false,
         targetId: 'channel',
         image: true,
       ),
       TransferTask.upload(
-        file: File('/tmp/second.txt'),
+        file: XFile('/tmp/second.txt'),
         direct: false,
         targetId: 'channel',
         image: false,
@@ -381,6 +383,7 @@ void main() {
     final error = const SocketException('timed out');
 
     expect(apiConnectShouldRetry(error, 0), isTrue);
+    expect(apiConnectShouldRetry(http.ClientException('offline'), 0), isTrue);
     expect(apiConnectShouldRetry(error, 1), isFalse);
     expect(apiConnectShouldRetry(StateError('response failed'), 0), isFalse);
   });
@@ -2977,6 +2980,15 @@ void main() {
     expect(
       serverMenuActions(claimed: true, isOwner: false, permissions: const {}),
       [ServerMenuAction.pair],
+    );
+    expect(
+      serverMenuActions(
+        claimed: true,
+        isOwner: false,
+        permissions: const {'server.profile.update'},
+        allowPairing: false,
+      ),
+      [ServerMenuAction.settings],
     );
     expect(
       serverMenuActions(

@@ -75,6 +75,17 @@ type OSServer struct {
 	CreatedAt                 time.Time                `json:"created_at"`
 }
 
+// WebSettings belongs to the OpenSpeak installation, not to a logical server.
+// Generation invalidates every token issued to the official Web client when
+// the Web entry point is disabled or moved.
+type WebSettings struct {
+	Enabled           bool      `json:"enabled"`
+	CustomPathEnabled bool      `json:"custom_path_enabled"`
+	Path              string    `json:"path"`
+	Generation        int64     `json:"-"`
+	UpdatedAt         time.Time `json:"updated_at"`
+}
+
 type ServerMember struct {
 	ServerID    string    `json:"server_id"`
 	UserID      string    `json:"user_id"`

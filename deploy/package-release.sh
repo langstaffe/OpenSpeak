@@ -12,6 +12,7 @@ DIST_PKG_DIR="${DIST_DIR}/${PKG_NAME}"
 TARBALL="${DIST_DIR}/${PKG_NAME}.tar.gz"
 OPEN_SPEAK_BIN="${OPEN_SPEAK_BIN:-${ROOT_DIR}/openspeak-linux-amd64}"
 OPEN_SPEAK_CTL_BIN="${OPEN_SPEAK_CTL_BIN:-${ROOT_DIR}/openspeakctl-linux-amd64}"
+WEB_ROOT="${WEB_ROOT:-${ROOT_DIR}/clients/openspeak_flutter/build/web}"
 LIVEKIT_BIN="${LIVEKIT_BIN:-}"
 CADDY_BIN="${CADDY_BIN:-}"
 WITHOUT_LIVEKIT="${WITHOUT_LIVEKIT:-0}"
@@ -30,6 +31,7 @@ Environment:
   VERSION=0.1.0
   OPEN_SPEAK_BIN=/path/to/openspeak-linux-amd64
   OPEN_SPEAK_CTL_BIN=/path/to/openspeakctl-linux-amd64
+  WEB_ROOT=/path/to/flutter/build/web
   LIVEKIT_BIN=/path/to/livekit-server
   CADDY_BIN=/path/to/caddy    Caddy 2.11.3 or newer.
   WITHOUT_LIVEKIT=1     Build package without LiveKit binary.
@@ -52,6 +54,10 @@ if [[ ! -f "${OPEN_SPEAK_BIN}" ]]; then
 fi
 if [[ ! -f "${OPEN_SPEAK_CTL_BIN}" ]]; then
   echo "missing OpenSpeak control binary: ${OPEN_SPEAK_CTL_BIN}" >&2
+  exit 1
+fi
+if [[ ! -f "${WEB_ROOT}/index.html" ]]; then
+  echo "missing Flutter Web build: ${WEB_ROOT}/index.html; run 'cd clients/openspeak_flutter && flutter build web --release' first" >&2
   exit 1
 fi
 
@@ -84,7 +90,7 @@ if [[ -e "${DIST_PKG_DIR}" || -e "${TARBALL}" ]]; then
   fi
 fi
 install -d "${DIST_DIR}"
-install -d "${PKG_DIR}/bin" "${PKG_DIR}/deploy"
+install -d "${PKG_DIR}/bin" "${PKG_DIR}/deploy" "${PKG_DIR}/web"
 
 install -m 0755 "${OPEN_SPEAK_BIN}" "${PKG_DIR}/bin/openspeak-linux-amd64"
 install -m 0755 "${OPEN_SPEAK_CTL_BIN}" "${PKG_DIR}/bin/openspeakctl"
@@ -92,6 +98,7 @@ install -m 0755 "${CADDY_BIN}" "${PKG_DIR}/bin/caddy"
 if [[ "${WITHOUT_LIVEKIT}" != "1" ]]; then
   install -m 0755 "${LIVEKIT_BIN}" "${PKG_DIR}/bin/livekit-server"
 fi
+cp -R "${WEB_ROOT}/." "${PKG_DIR}/web/"
 
 install -m 0755 "${ROOT_DIR}/deploy/openspeak_startscript.sh" "${PKG_DIR}/openspeak_startscript.sh"
 install -m 0755 "${ROOT_DIR}/deploy/install-linux.sh" "${PKG_DIR}/deploy/install-linux.sh"
@@ -133,6 +140,7 @@ Owner emergency recovery:
   sudo openspeakctl owner recover
 
 Notes:
+  - Web access is disabled by default. Enable it under Server Settings > Web Settings.
   - Portable start keeps config, data, logs, and pid files inside this directory:
       config/
       data/
