@@ -262,6 +262,11 @@ func (s *SQLite) GetServerPasswordHash(ctx context.Context, serverID string) (st
 }
 
 func (s *SQLite) UpdateServer(ctx context.Context, serverID string, name *string, encryptionMode *string, fileRoot *string, historyRetentionDays *int, serverPasswordHash *string, screenSharePolicy *ScreenSharePolicy, defaultChannelID *string, attachmentExternalEnabled *bool, attachmentFileNodeID *string, voiceAudioBitrateKbps *int, screenShareBitrateLimits *ScreenShareBitrateLimits) (OSServer, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return OSServer{}, err
+	}
+	defer tx.Rollback()
 	var policyValue any
 	if screenSharePolicy != nil {
 		policyJSON, err := json.Marshal(screenSharePolicy)
@@ -286,7 +291,7 @@ func (s *SQLite) UpdateServer(ctx context.Context, serverID string, name *string
 	var createdAt string
 	var policyText string
 	var bitrateLimitsText string
-	err := s.db.QueryRowContext(ctx, `
+	err = tx.QueryRowContext(ctx, `
 		UPDATE os_servers
 		SET name = COALESCE(?, name),
 			encryption_mode = COALESCE(?, encryption_mode),
@@ -310,10 +315,26 @@ func (s *SQLite) UpdateServer(ctx context.Context, serverID string, name *string
 	if errors.Is(err, sql.ErrNoRows) {
 		return OSServer{}, ErrNotFound
 	}
+	if err != nil {
+		return OSServer{}, err
+	}
+	if serverPasswordHash != nil {
+		if _, err = tx.ExecContext(ctx, `
+			UPDATE instance_settings
+			SET web_session_generation = web_session_generation + 1,
+				updated_at = CURRENT_TIMESTAMP
+			WHERE id = 1
+		`); err != nil {
+			return OSServer{}, err
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return OSServer{}, err
+	}
 	server.CreatedAt = parseDBTime(createdAt)
 	server.ScreenSharePolicy = decodeScreenSharePolicy(policyText)
 	server.ScreenShareBitrateLimits = decodeScreenShareBitrateLimits(bitrateLimitsText)
-	return server, err
+	return server, nil
 }
 
 func (s *SQLite) UpdateServerTLS(ctx context.Context, serverID, certificateType, identifier, status, tlsError string, expiresAt *time.Time, encryptionMode *string) (OSServer, error) {

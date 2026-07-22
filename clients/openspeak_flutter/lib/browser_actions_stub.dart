@@ -2,6 +2,12 @@ import 'dart:typed_data';
 
 bool browserSupportsWebRtc() => true;
 
+String? readBrowserSessionValue(String key) => null;
+
+void writeBrowserSessionValue(String key, String value) {}
+
+void removeBrowserSessionValue(String key) {}
+
 void downloadBrowserBytes(Uint8List bytes, String name, String contentType) {
   throw UnsupportedError('Browser downloads are unavailable');
 }

@@ -532,11 +532,34 @@ void main() {
     );
   });
 
-  test('voice audio publishing keeps DTX and RED enabled', () {
-    final options = voiceAudioPublishOptions(64);
-    expect(options.encoding?.maxBitrate, 64000);
-    expect(options.dtx, isTrue);
-    expect(options.red, isTrue);
+  test('voice audio publishing disables DTX only on Web', () {
+    final desktop = voiceAudioPublishOptions(64, isWeb: false);
+    final web = voiceAudioPublishOptions(64, isWeb: true);
+    expect(desktop.encoding?.maxBitrate, 64000);
+    expect(desktop.dtx, isTrue);
+    expect(web.dtx, isFalse);
+    expect(web.red, isTrue);
+  });
+
+  test('stored Web auth sessions expire without storing the password', () {
+    final expiresAt = DateTime.utc(2026, 7, 23, 12);
+    final session = AuthSession(
+      token: 'jwt',
+      user: User(id: 'user', displayName: 'User'),
+      expiresAt: expiresAt,
+    );
+    final encoded = jsonEncode(session);
+
+    expect(encoded, isNot(contains('password')));
+    expect(
+      AuthSession.fromStorage(
+        encoded,
+        now: expiresAt.subtract(const Duration(seconds: 1)),
+      )?.token,
+      'jwt',
+    );
+    expect(AuthSession.fromStorage(encoded, now: expiresAt), isNull);
+    expect(AuthSession.fromStorage('not-json'), isNull);
   });
 
   test('voice auto-subscription stays disabled while listen-off is active', () {

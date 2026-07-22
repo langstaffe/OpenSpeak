@@ -97,6 +97,7 @@ const microphonePushToTalkHotkeyKey = 'openspeak.microphonePushToTalkHotkey.v1';
 const noiseSuppressionEnabledKey = 'openspeak.noiseSuppressionEnabled.v1';
 const memberOutputVolumesKey = 'openspeak.memberOutputVolumes.v1';
 const unreadStateKeyPrefix = 'openspeak.unreadState.v1';
+const webAuthSessionStorageKey = 'openspeak.webAuthSession.v1';
 // Keep cover parsing client-side and metadata-only so future E2EE can decrypt locally.
 const audioMetadataReadLimitBytes = 8 * 1024 * 1024;
 
@@ -1592,6 +1593,38 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     }
   }
 
+  Future<({AuthSession session, List<OsServer> servers})> loginAndLoadServers(
+    OpenSpeakApi client,
+    String displayName,
+    String installationId,
+  ) async {
+    if (kIsWeb) {
+      final cached = AuthSession.fromStorage(
+        readBrowserSessionValue(webAuthSessionStorageKey),
+      );
+      if (cached != null) {
+        try {
+          return (
+            session: cached,
+            servers: await client.listServers(cached.token),
+          );
+        } on OpenSpeakException catch (exception) {
+          if (exception.statusCode != HttpStatus.unauthorized) rethrow;
+        }
+      }
+      removeBrowserSessionValue(webAuthSessionStorageKey);
+    }
+    final session = await loginSession(client, displayName, installationId);
+    final servers = await client.listServers(session.token);
+    if (kIsWeb) cacheWebAuthSession(session);
+    return (session: session, servers: servers);
+  }
+
+  void cacheWebAuthSession(AuthSession auth) {
+    if (!kIsWeb || auth.expiresAt == null) return;
+    writeBrowserSessionValue(webAuthSessionStorageKey, jsonEncode(auth));
+  }
+
   Future<AuthSession> showWebPasswordDialog(
     OpenSpeakApi client,
     String displayName,
@@ -1725,8 +1758,15 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
           ? 'OpenSpeak User'
           : localDisplayName.trim();
       late AuthSession nextSession;
+      late List<OsServer> nextServers;
       try {
-        nextSession = await loginSession(nextApi, displayName, installationId);
+        final result = await loginAndLoadServers(
+          nextApi,
+          displayName,
+          installationId,
+        );
+        nextSession = result.session;
+        nextServers = result.servers;
       } on OpenSpeakException catch (exception) {
         final canonicalBase = canonicalServerBaseUri(nextApi.baseUri, {
           'error': exception.code,
@@ -1739,9 +1779,14 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         await persistSelectedConnectionUrl(canonicalUrl);
         if (!isActiveConnectionGeneration(generation)) return;
         nextApi = OpenSpeakApi(canonicalUrl);
-        nextSession = await loginSession(nextApi, displayName, installationId);
+        final result = await loginAndLoadServers(
+          nextApi,
+          displayName,
+          installationId,
+        );
+        nextSession = result.session;
+        nextServers = result.servers;
       }
-      var nextServers = await nextApi.listServers(nextSession.token);
       final loginUserId = nextSession.user.id;
       if (!kIsWeb && nextServers.isNotEmpty) {
         final hasOwnerCredentialHint = await ownerIdentity.hasCredentialHint(
@@ -1988,7 +2033,11 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       )) {
         final user = await client.uploadCurrentUserAvatar(auth.token, local);
         await prefs.setBool(localProfileAvatarPendingSyncKey, false);
-        return AuthSession(token: auth.token, user: user);
+        return AuthSession(
+          token: auth.token,
+          user: user,
+          expiresAt: auth.expiresAt,
+        );
       }
       return auth;
     }
@@ -6370,8 +6419,15 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       );
       if (!mounted || !identical(session, auth)) return;
       setState(() {
-        session = AuthSession(token: auth.token, user: updatedUser);
+        session = AuthSession(
+          token: auth.token,
+          user: updatedUser,
+          expiresAt: auth.expiresAt,
+        );
       });
+      if (session case final AuthSession updatedSession) {
+        cacheWebAuthSession(updatedSession);
+      }
       await refreshServerState();
     });
   }

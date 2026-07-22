@@ -37,12 +37,14 @@ double effectiveParticipantOutputVolume(
     .clamp(0.0, 2.0)
     .toDouble();
 
-lk.AudioPublishOptions voiceAudioPublishOptions(int bitrateKbps) =>
-    lk.AudioPublishOptions(
-      encoding: lk.AudioEncoding(maxBitrate: bitrateKbps * 1000),
-      dtx: true,
-      red: true,
-    );
+lk.AudioPublishOptions voiceAudioPublishOptions(
+  int bitrateKbps, {
+  bool isWeb = kIsWeb,
+}) => lk.AudioPublishOptions(
+  encoding: lk.AudioEncoding(maxBitrate: bitrateKbps * 1000),
+  dtx: !isWeb,
+  red: true,
+);
 
 class ScreenShareQuality {
   const ScreenShareQuality(this.resolution, this.fps);
@@ -827,6 +829,8 @@ class VoiceSessionController extends ChangeNotifier {
   double _latencyJitterMs = 0;
   final Map<String, num> _receiverPacketsReceived = {};
   final Map<String, num> _receiverPacketsLost = {};
+  final Map<String, num> _receiverJitterBufferDelay = {};
+  final Map<String, num> _receiverJitterBufferEmittedCount = {};
   final Map<String, num> _senderPacketsSent = {};
   final Map<String, num> _senderPacketsLost = {};
   final Map<String, _AudioEnergySample> _audioEnergySamples = {};
@@ -2774,6 +2778,8 @@ class VoiceSessionController extends ChangeNotifier {
   void _handleRemoteAudioChanged() {
     _receiverPacketsReceived.clear();
     _receiverPacketsLost.clear();
+    _receiverJitterBufferDelay.clear();
+    _receiverJitterBufferEmittedCount.clear();
     unawaited(_applyMediaRouting());
     _refreshRoomSnapshot();
   }
@@ -3235,6 +3241,32 @@ class VoiceSessionController extends ChangeNotifier {
         }
         _receiverPacketsReceived[streamId] = received;
         _receiverPacketsLost[streamId] = lost;
+        if (kIsWeb && track.receiver != null) {
+          final rawStats = await track.receiver!.getStats();
+          for (final report in rawStats) {
+            if (report.type != 'inbound-rtp') continue;
+            final delay = report.values['jitterBufferDelay'];
+            final count = report.values['jitterBufferEmittedCount'];
+            if (delay is! num || count is! num) break;
+            final average = counterAverageDelta(
+              total: delay,
+              previousTotal: _receiverJitterBufferDelay[streamId],
+              count: count,
+              previousCount: _receiverJitterBufferEmittedCount[streamId],
+            );
+            _receiverJitterBufferDelay[streamId] = delay;
+            _receiverJitterBufferEmittedCount[streamId] = count;
+            if (average != null) {
+              ClientLog.write(
+                'voice.audio.stats',
+                'stream=$streamId '
+                    'jitter_buffer_ms=${(average * 1000).toStringAsFixed(1)} '
+                    'jitter_ms=${stats.jitter == null ? 'unknown' : (stats.jitter! * 1000).toStringAsFixed(1)}',
+              );
+            }
+            break;
+          }
+        }
         remoteBitrate += track.currentBitrate ?? 0;
         remoteBytesReceived += stats.bytesReceived?.round() ?? 0;
       }
@@ -3242,6 +3274,12 @@ class VoiceSessionController extends ChangeNotifier {
         (streamId, _) => !sampledStreamIds.contains(streamId),
       );
       _receiverPacketsLost.removeWhere(
+        (streamId, _) => !sampledStreamIds.contains(streamId),
+      );
+      _receiverJitterBufferDelay.removeWhere(
+        (streamId, _) => !sampledStreamIds.contains(streamId),
+      );
+      _receiverJitterBufferEmittedCount.removeWhere(
         (streamId, _) => !sampledStreamIds.contains(streamId),
       );
       if (remoteTracks.isEmpty) {
@@ -4019,6 +4057,8 @@ class VoiceSessionController extends ChangeNotifier {
     await listener?.dispose();
     _receiverPacketsReceived.clear();
     _receiverPacketsLost.clear();
+    _receiverJitterBufferDelay.clear();
+    _receiverJitterBufferEmittedCount.clear();
     _senderPacketsSent.clear();
     _senderPacketsLost.clear();
     _audioEnergySamples.clear();

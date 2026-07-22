@@ -1752,6 +1752,9 @@ func (s *Server) handleServers(w http.ResponseWriter, r *http.Request, authCtx a
 		if req.ScreenSharePolicy != nil {
 			s.enforceScreenSharePermissions(r.Context(), parts[0])
 		}
+		if passwordHash != nil {
+			s.hub.DisconnectClientType("web", "server.password_changed")
+		}
 		if previousEncryptionMode != "" && previousEncryptionMode != server.EncryptionMode {
 			s.hub.NotifyAndDisconnectServer(parts[0], realtime.Event{
 				Type: "server.encryption_changed", ServerID: parts[0],

@@ -11,6 +11,30 @@ external JSFunction? get _rtcPeerConnection;
 
 bool browserSupportsWebRtc() => _rtcPeerConnection != null;
 
+String? readBrowserSessionValue(String key) {
+  try {
+    return html.window.sessionStorage[key];
+  } catch (_) {
+    return null;
+  }
+}
+
+void writeBrowserSessionValue(String key, String value) {
+  try {
+    html.window.sessionStorage[key] = value;
+  } catch (_) {
+    // Private browsing policies may disable storage; login still works.
+  }
+}
+
+void removeBrowserSessionValue(String key) {
+  try {
+    html.window.sessionStorage.remove(key);
+  } catch (_) {
+    // Nothing to clear when storage is unavailable.
+  }
+}
+
 void downloadBrowserBytes(Uint8List bytes, String name, String contentType) {
   final url = createBrowserObjectUrl(bytes, contentType);
   final anchor = html.AnchorElement(href: url)

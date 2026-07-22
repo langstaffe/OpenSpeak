@@ -128,6 +128,31 @@ func TestWebSettingsRouteAndSessionInvalidation(t *testing.T) {
 	if afterNoOpResponse.Code != http.StatusOK {
 		t.Fatalf("Web token after no-op = %d, body = %s", afterNoOpResponse.Code, afterNoOpResponse.Body.String())
 	}
+	passwordUpdate := httptest.NewRequest(http.MethodPatch, "https://example.test/api/v1/servers/"+env.os.ID+"/settings", strings.NewReader(`{"server_password":"new-password"}`))
+	passwordUpdate.Header.Set("Authorization", "Bearer "+ownerToken)
+	passwordUpdate.Header.Set("Content-Type", "application/json")
+	passwordUpdateResponse := httptest.NewRecorder()
+	env.server.ServeHTTP(passwordUpdateResponse, passwordUpdate)
+	if passwordUpdateResponse.Code != http.StatusOK {
+		t.Fatalf("password update = %d, body = %s", passwordUpdateResponse.Code, passwordUpdateResponse.Body.String())
+	}
+	requestAfterPasswordChange := httptest.NewRequest(http.MethodGet, "https://example.test/api/v1/servers", nil)
+	requestAfterPasswordChange.Header.Set("Authorization", "Bearer "+loginResult.Token)
+	afterPasswordChangeResponse := httptest.NewRecorder()
+	env.server.ServeHTTP(afterPasswordChangeResponse, requestAfterPasswordChange)
+	if afterPasswordChangeResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("Web token after password change = %d, body = %s", afterPasswordChangeResponse.Code, afterPasswordChangeResponse.Body.String())
+	}
+	login = httptest.NewRequest(http.MethodPost, "https://example.test/api/v1/auth/login", strings.NewReader(`{"display_name":"Browser user","client_type":"web","password":"new-password"}`))
+	login.Header.Set("Content-Type", "application/json")
+	loginResponse = httptest.NewRecorder()
+	env.server.ServeHTTP(loginResponse, login)
+	if loginResponse.Code != http.StatusOK {
+		t.Fatalf("Web login after password change = %d, body = %s", loginResponse.Code, loginResponse.Body.String())
+	}
+	if err := json.Unmarshal(loginResponse.Body.Bytes(), &loginResult); err != nil {
+		t.Fatal(err)
+	}
 
 	disable := httptest.NewRequest(http.MethodPut, "https://example.test/api/v1/servers/"+env.os.ID+"/web-settings", strings.NewReader(`{"enabled":false,"custom_path_enabled":true,"path":"chat"}`))
 	disable.Header.Set("Authorization", "Bearer "+ownerToken)

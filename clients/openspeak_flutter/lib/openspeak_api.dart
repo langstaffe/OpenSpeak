@@ -2094,15 +2094,39 @@ class OpenSpeakException implements Exception {
 }
 
 class AuthSession {
-  AuthSession({required this.token, required this.user});
+  AuthSession({required this.token, required this.user, this.expiresAt});
   final String token;
   final User user;
+  final DateTime? expiresAt;
 
   factory AuthSession.fromJson(Map<String, dynamic> json) {
     return AuthSession(
       token: json['token'] as String,
       user: User.fromJson(json['user'] as Map<String, dynamic>),
+      expiresAt: DateTime.tryParse(json['expires_at'] as String? ?? ''),
     );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'token': token,
+    'user': user.toJson(),
+    'expires_at': expiresAt?.toUtc().toIso8601String(),
+  };
+
+  static AuthSession? fromStorage(String? value, {DateTime? now}) {
+    if (value == null || value.isEmpty) return null;
+    try {
+      final decoded = jsonDecode(value);
+      if (decoded is! Map) return null;
+      final session = AuthSession.fromJson(decoded.cast<String, dynamic>());
+      final expiresAt = session.expiresAt;
+      if (expiresAt == null || !expiresAt.isAfter(now ?? DateTime.now())) {
+        return null;
+      }
+      return session;
+    } catch (_) {
+      return null;
+    }
   }
 }
 
@@ -2126,6 +2150,13 @@ class User {
       avatarHash: json['avatar_hash'] as String? ?? '',
     );
   }
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'display_name': displayName,
+    'avatar_version': avatarVersion,
+    'avatar_hash': avatarHash,
+  };
 }
 
 class Device {
@@ -2294,6 +2325,7 @@ class OwnerAuthResult extends AuthSession {
   OwnerAuthResult({
     required super.token,
     required super.user,
+    super.expiresAt,
     required this.ownerDevice,
   });
 
@@ -2303,6 +2335,7 @@ class OwnerAuthResult extends AuthSession {
     return OwnerAuthResult(
       token: json['token'] as String,
       user: User.fromJson(json['user'] as Map<String, dynamic>),
+      expiresAt: DateTime.tryParse(json['expires_at'] as String? ?? ''),
       ownerDevice: OwnerDeviceInfo.fromJson(
         json['owner_device'] as Map<String, dynamic>,
       ),
