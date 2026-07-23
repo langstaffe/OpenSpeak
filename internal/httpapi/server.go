@@ -3140,7 +3140,7 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request, authCtx aut
 			writeError(w, http.StatusConflict, "insecure_file_node", "external attachment nodes require HTTPS")
 			return
 		}
-		downloadURL, err := externalObjectURL(node, file.ObjectKey, "get", file.OriginalName, file.ContentType, file.SizeBytes, 5*time.Minute)
+		downloadURL, err := externalObjectURL(node, file.ObjectKey, "get", file.OriginalName, file.ContentType, file.SizeBytes, externalDownloadTTL(r))
 		if err != nil {
 			writeError(w, http.StatusBadGateway, "file_node_unavailable", "attachment file node configuration is invalid")
 			return

@@ -23,6 +23,7 @@ import (
 )
 
 const externalUploadTTL = 60 * time.Minute
+const externalStreamDownloadTTL = 6 * time.Hour
 
 const (
 	attachmentEncryptionFormatV1   = "openspeak-attachment-v1"
@@ -417,6 +418,13 @@ func (s *Server) parseAttachmentCompletionToken(token string) (attachmentUploadC
 
 func externalObjectURL(node store.FileNode, objectKey, operation, name, contentType string, size int64, ttl time.Duration) (string, error) {
 	return filenode.SignedURL(node.BaseURL, node.Secret, filenode.Ticket{Operation: operation, ObjectKey: objectKey, ExpiresAt: time.Now().Add(ttl), MaxBytes: size, Name: name, ContentType: contentType})
+}
+
+func externalDownloadTTL(r *http.Request) time.Duration {
+	if r.URL.Query().Get("stream") == "1" {
+		return externalStreamDownloadTTL
+	}
+	return 5 * time.Minute
 }
 
 func (s *Server) queueExternalUploadDelete(claims attachmentUploadClaims) {

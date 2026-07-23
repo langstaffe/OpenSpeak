@@ -3,6 +3,9 @@ import 'dart:typed_data';
 
 bool browserSupportsWebRtc() => true;
 
+typedef BrowserAudioRangeReader =
+    Future<Uint8List> Function(int start, int endInclusive);
+
 String? readBrowserSessionValue(String key) => null;
 
 void writeBrowserSessionValue(String key, String value) {}
@@ -28,10 +31,21 @@ class BrowserAudioPlayer {
 
   Stream<void> get onComplete => const Stream.empty();
 
+  bool get supportsStreaming => false;
+
   void unlock() {}
 
   Future<void> playUrl(String url) {
     throw UnsupportedError('Browser audio is unavailable');
+  }
+
+  Future<void> playStream({
+    required int sizeBytes,
+    required String name,
+    required String contentType,
+    required BrowserAudioRangeReader readRange,
+  }) {
+    throw UnsupportedError('Browser audio streaming is unavailable');
   }
 
   Future<void> resume() {

@@ -1820,6 +1820,19 @@ class OpenSpeakApi {
     return apiUri('/api/v1/files/$fileId/download', {'token': token});
   }
 
+  Future<Uri?> directFileStreamUri(String token, String fileId) {
+    return _externalStreamUri(token, '/api/v1/direct-files/$fileId/download');
+  }
+
+  Future<Uri?> storedFileStreamUri(String token, String fileId) {
+    return _externalStreamUri(token, '/api/v1/files/$fileId/download');
+  }
+
+  Future<Uri?> _externalStreamUri(String token, String path) async {
+    final target = await _downloadTarget(token, path, stream: true);
+    return target.withAuthorization ? null : target.uri;
+  }
+
   Future<Uint8List> readDirectFileRange(
     String token,
     String fileId, {
@@ -1883,11 +1896,12 @@ class OpenSpeakApi {
 
   Future<({Uri uri, bool withAuthorization})> _downloadTarget(
     String token,
-    String path,
-  ) async {
+    String path, {
+    bool stream = false,
+  }) async {
     final authenticated = (uri: apiUri(path), withAuthorization: true);
     if (!kIsWeb) return authenticated;
-    final key = '$token\n$baseUri\n$path';
+    final key = '$token\n$baseUri\n$path\n$stream';
     final now = DateTime.now();
     final cached = _webDownloadTargets[key];
     if (cached != null &&
@@ -1898,7 +1912,7 @@ class OpenSpeakApi {
       'GET',
       path,
       token: token,
-      query: const {'external_url': '1'},
+      query: {'external_url': '1', if (stream) 'stream': '1'},
     );
     final rawUrl = json is Map ? json['url'] as String? ?? '' : '';
     if (rawUrl.isEmpty) {
@@ -1917,7 +1931,9 @@ class OpenSpeakApi {
     _webDownloadTargets[key] = (
       uri: uri,
       withAuthorization: false,
-      expiresAt: now.add(const Duration(minutes: 4)),
+      expiresAt: now.add(
+        stream ? const Duration(hours: 5) : const Duration(minutes: 4),
+      ),
     );
     return (uri: uri, withAuthorization: false);
   }

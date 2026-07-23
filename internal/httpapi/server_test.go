@@ -1837,6 +1837,38 @@ func TestExternalChannelAttachmentUploadAndDownloadRedirect(t *testing.T) {
 	if resolveResponse.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("external download resolution cache control = %q", resolveResponse.Header().Get("Cache-Control"))
 	}
+	streamResolveRequest := httptest.NewRequest(http.MethodGet, "/api/v1/files/"+result.File.ID+"/download?external_url=1&stream=1", nil)
+	streamResolveRequest.Header.Set("Authorization", "Bearer "+env.token)
+	streamResolveResponse := httptest.NewRecorder()
+	env.server.ServeHTTP(streamResolveResponse, streamResolveRequest)
+	var streamResolved struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(streamResolveResponse.Body.Bytes(), &streamResolved); err != nil || streamResolveResponse.Code != http.StatusOK {
+		t.Fatalf("stream download resolution = %d %#v, err = %v", streamResolveResponse.Code, streamResolved, err)
+	}
+	streamURL, err := url.Parse(streamResolved.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamExpiry, err := strconv.ParseInt(streamURL.Query().Get("exp"), 10, 64)
+	if err != nil || time.Until(time.Unix(streamExpiry, 0)) < 5*time.Hour {
+		t.Fatalf("stream URL expiry = %q, err = %v", streamURL.Query().Get("exp"), err)
+	}
+	rangeRequest, err := http.NewRequest(http.MethodGet, streamResolved.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rangeRequest.Header.Set("Range", "bytes=0-9")
+	rangeResponse, err := http.DefaultClient.Do(rangeRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rangePayload, rangeReadErr := io.ReadAll(rangeResponse.Body)
+	rangeResponse.Body.Close()
+	if rangeReadErr != nil || rangeResponse.StatusCode != http.StatusPartialContent || !bytes.Equal(rangePayload, payload[:10]) {
+		t.Fatalf("stream range = %d payload=%d, err = %v", rangeResponse.StatusCode, len(rangePayload), rangeReadErr)
+	}
 	resolvedResponse, err := http.Get(resolved.URL)
 	if err != nil {
 		t.Fatal(err)

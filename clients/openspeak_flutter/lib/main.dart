@@ -5509,23 +5509,43 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       if (auth == null || client == null) {
         throw OpenSpeakException('未连接服务器');
       }
-      final bytes = await loadAfterBrowserAudioUnlock(
+      final streamUri = await loadAfterBrowserAudioUnlock<Uri?>(
         unlock: browserAudioPlayer.unlock,
-        load: () => downloadAttachmentBytes(attachment),
+        load: () {
+          if (attachment.encrypted) return Future.value();
+          return attachment.direct
+              ? client.directFileStreamUri(auth.token, attachment.fileId)
+              : client.storedFileStreamUri(auth.token, attachment.fileId);
+        },
       );
       if (!mounted || activeAudioFileId != attachment.fileId) return;
       final previousObjectUrl = activeAudioObjectUrl;
       if (previousObjectUrl != null) {
         revokeBrowserObjectUrl(previousObjectUrl);
       }
-      final url = createBrowserObjectUrl(
-        bytes,
-        attachment.contentType.isEmpty
-            ? contentTypeForPath(attachment.displayName)
-            : attachment.contentType,
-      );
-      activeAudioObjectUrl = url;
-      await browserAudioPlayer.playUrl(url);
+      activeAudioObjectUrl = null;
+      final contentType = attachment.contentType.isEmpty
+          ? contentTypeForPath(attachment.displayName)
+          : attachment.contentType;
+      if (streamUri != null) {
+        await browserAudioPlayer.playUrl(streamUri.toString());
+      } else if (browserAudioPlayer.supportsStreaming) {
+        await browserAudioPlayer.playStream(
+          sizeBytes: attachment.sizeBytes,
+          name: attachment.displayName,
+          contentType: contentType,
+          readRange: (start, endInclusive) => readAttachmentRange(
+            attachment,
+            start: start,
+            endInclusive: endInclusive,
+          ),
+        );
+      } else {
+        final bytes = await downloadAttachmentBytes(attachment);
+        if (!mounted || activeAudioFileId != attachment.fileId) return;
+        activeAudioObjectUrl = createBrowserObjectUrl(bytes, contentType);
+        await browserAudioPlayer.playUrl(activeAudioObjectUrl!);
+      }
       if (!mounted || activeAudioFileId != attachment.fileId) return;
       setState(() {
         loadingAudioFileId = null;

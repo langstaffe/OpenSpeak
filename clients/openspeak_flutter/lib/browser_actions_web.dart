@@ -5,12 +5,19 @@
 import 'dart:async';
 import 'dart:html' as html;
 import 'dart:js_interop';
+import 'dart:math';
 import 'dart:typed_data';
 
 @JS('RTCPeerConnection')
 external JSFunction? get _rtcPeerConnection;
 
+@JS('openSpeakAudioStreamWorkerReady')
+external bool? get _audioStreamWorkerReady;
+
 bool browserSupportsWebRtc() => _rtcPeerConnection != null;
+
+typedef BrowserAudioRangeReader =
+    Future<Uint8List> Function(int start, int endInclusive);
 
 String? readBrowserSessionValue(String key) {
   try {
@@ -58,7 +65,7 @@ void revokeBrowserObjectUrl(String url) => html.Url.revokeObjectUrl(url);
 class BrowserAudioPlayer {
   BrowserAudioPlayer() {
     _audio
-      ..preload = 'auto'
+      ..preload = 'metadata'
       ..crossOrigin = 'anonymous'
       ..src = _unlockSource
       ..style.display = 'none';
@@ -82,6 +89,9 @@ class BrowserAudioPlayer {
         _complete.add(null);
       }),
     ]);
+    _workerSubscription = html.window.navigator.serviceWorker?.onMessage.listen(
+      _handleWorkerMessage,
+    );
   }
 
   final _audio = html.AudioElement();
@@ -90,6 +100,10 @@ class BrowserAudioPlayer {
   final _playing = StreamController<bool>.broadcast();
   final _complete = StreamController<void>.broadcast();
   final _subscriptions = <StreamSubscription<html.Event>>[];
+  final _streamReaders = <String, BrowserAudioRangeReader>{};
+  final _random = Random.secure();
+  StreamSubscription<html.MessageEvent>? _workerSubscription;
+  String? _activeStreamId;
   var _priming = true;
   var _unlocked = false;
 
@@ -109,6 +123,10 @@ class BrowserAudioPlayer {
 
   Stream<void> get onComplete => _complete.stream;
 
+  bool get supportsStreaming =>
+      _audioStreamWorkerReady == true &&
+      html.window.navigator.serviceWorker?.controller != null;
+
   void unlock() {
     if (_unlocked) return;
     _unlocked = true;
@@ -117,6 +135,39 @@ class BrowserAudioPlayer {
   }
 
   Future<void> playUrl(String url) {
+    _clearStreamSource();
+    return _playUrl(url);
+  }
+
+  Future<void> playStream({
+    required int sizeBytes,
+    required String name,
+    required String contentType,
+    required BrowserAudioRangeReader readRange,
+  }) async {
+    if (!supportsStreaming) {
+      throw UnsupportedError('Browser audio streaming is unavailable');
+    }
+    _clearStreamSource();
+    final sourceId =
+        '${DateTime.now().microsecondsSinceEpoch}-${_random.nextInt(1 << 32)}';
+    _activeStreamId = sourceId;
+    _streamReaders[sourceId] = readRange;
+    final baseUri = Uri.parse(
+      html.document.baseUri ?? html.window.location.href,
+    );
+    final uri = baseUri
+        .resolve('__openspeak_audio__/$sourceId/${Uri.encodeComponent(name)}')
+        .replace(queryParameters: {'size': '$sizeBytes', 'type': contentType});
+    try {
+      await _playUrl(uri.toString());
+    } catch (_) {
+      _clearStreamSource();
+      rethrow;
+    }
+  }
+
+  Future<void> _playUrl(String url) {
     _unlocked = true;
     _priming = false;
     _audio
@@ -137,6 +188,7 @@ class BrowserAudioPlayer {
   }
 
   void stop() {
+    _clearStreamSource();
     _priming = true;
     _audio.pause();
     _audio.currentTime = 0;
@@ -149,6 +201,7 @@ class BrowserAudioPlayer {
     for (final subscription in _subscriptions) {
       await subscription.cancel();
     }
+    await _workerSubscription?.cancel();
     await Future.wait([
       _position.close(),
       _durationChanges.close(),
@@ -161,6 +214,51 @@ class BrowserAudioPlayer {
     final value = seconds?.toDouble() ?? 0;
     if (!value.isFinite || value <= 0) return Duration.zero;
     return Duration(milliseconds: (value * 1000).round());
+  }
+
+  void _clearStreamSource() {
+    final sourceId = _activeStreamId;
+    _activeStreamId = null;
+    if (sourceId != null) _streamReaders.remove(sourceId);
+  }
+
+  void _handleWorkerMessage(html.MessageEvent event) {
+    final data = event.data;
+    if (data is! Map || data['type'] != 'openspeak-audio-range-request') {
+      return;
+    }
+    final requestId = data['requestId']?.toString();
+    final sourceId = data['sourceId']?.toString();
+    final start = (data['start'] as num?)?.toInt();
+    final endInclusive = (data['endInclusive'] as num?)?.toInt();
+    if (requestId == null ||
+        sourceId == null ||
+        start == null ||
+        endInclusive == null) {
+      return;
+    }
+    final reader = _streamReaders[sourceId];
+    if (reader == null) {
+      _postRangeResult(requestId, error: 'audio stream is no longer active');
+      return;
+    }
+    unawaited(() async {
+      try {
+        final bytes = await reader(start, endInclusive);
+        _postRangeResult(requestId, bytes: bytes);
+      } catch (error) {
+        _postRangeResult(requestId, error: '$error');
+      }
+    }());
+  }
+
+  void _postRangeResult(String requestId, {Uint8List? bytes, String? error}) {
+    html.window.navigator.serviceWorker?.controller?.postMessage({
+      'type': 'openspeak-audio-range-result',
+      'requestId': requestId,
+      'bytes': ?bytes,
+      'error': ?error,
+    });
   }
 }
 
