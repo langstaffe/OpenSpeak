@@ -2186,6 +2186,43 @@ void main() {
     expect(accessed, isFalse);
   });
 
+  testWidgets(
+    'image lightbox zooms without turning the image into a download',
+    (WidgetTester tester) async {
+      var downloads = 0;
+      var closes = 0;
+      final bytes = base64Decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMA'
+        'ASsJTYQAAAAASUVORK5CYII=',
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ImageLightbox(
+              preview: Future.value(
+                CachedImagePreview(bytes: bytes, size: const Size(1, 1)),
+              ),
+              onDownload: () => downloads += 1,
+              onClose: () => closes += 1,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byType(InteractiveViewer), findsOneWidget);
+      expect(
+        tester.getSize(find.byType(InteractiveViewer)),
+        const Size(768, 568),
+      );
+      await tester.tap(find.byTooltip('下载'));
+      expect(downloads, 1);
+      expect(closes, 0);
+      await tester.tap(find.byTooltip('关闭'));
+      expect(closes, 1);
+    },
+  );
+
   test('client installation IDs are UUIDv4 values', () {
     final first = generateClientInstallationId();
     final second = generateClientInstallationId();

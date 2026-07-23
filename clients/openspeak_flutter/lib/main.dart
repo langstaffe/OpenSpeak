@@ -5127,20 +5127,12 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   Future<void> openAttachment(ChatAttachment attachment) async {
     final auth = session;
     if (auth == null) return;
+    if (kIsWeb && attachment.isImage) {
+      await showImageLightbox(attachment);
+      return;
+    }
     if (kIsWeb) {
-      await runDownloadTask(attachment, () async {
-        final bytes = await downloadAttachmentBytes(
-          attachment,
-          onProgress: (done, total) =>
-              updateDownloadProgress(attachment.fileId, done, total),
-          cancelToken: downloadTasks[attachment.fileId]?.cancelToken,
-        );
-        downloadBrowserBytes(
-          bytes,
-          attachment.displayName,
-          attachmentContentType(attachment.contentType, attachment.displayName),
-        );
-      });
+      await downloadAttachmentInBrowser(attachment);
       return;
     }
     await runDownloadTask(attachment, () async {
@@ -5158,7 +5150,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     final auth = session;
     if (auth == null) return;
     if (kIsWeb) {
-      await openAttachment(attachment);
+      await downloadAttachmentInBrowser(attachment);
       return;
     }
     final destination = await getSaveLocation(
@@ -5174,6 +5166,36 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       );
       await cached.copy(destination.path);
     });
+  }
+
+  Future<void> downloadAttachmentInBrowser(ChatAttachment attachment) {
+    return runDownloadTask(attachment, () async {
+      final bytes = await downloadAttachmentBytes(
+        attachment,
+        onProgress: (done, total) =>
+            updateDownloadProgress(attachment.fileId, done, total),
+        cancelToken: downloadTasks[attachment.fileId]?.cancelToken,
+      );
+      downloadBrowserBytes(
+        bytes,
+        attachment.displayName,
+        attachmentContentType(attachment.contentType, attachment.displayName),
+      );
+    });
+  }
+
+  Future<void> showImageLightbox(ChatAttachment attachment) {
+    return showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: '关闭图片预览',
+      barrierColor: const Color(0xE6000000),
+      builder: (dialogContext) => ImageLightbox(
+        preview: loadImagePreview(attachment),
+        onDownload: () => unawaited(saveAttachmentAs(attachment)),
+        onClose: () => Navigator.pop(dialogContext),
+      ),
+    );
   }
 
   Future<void> runDownloadTask(
@@ -15555,6 +15577,96 @@ class CachedImagePreview {
   final File? file;
   final Uint8List? bytes;
   final Size size;
+}
+
+class ImageLightbox extends StatelessWidget {
+  const ImageLightbox({
+    super.key,
+    required this.preview,
+    required this.onDownload,
+    required this.onClose,
+  });
+
+  final Future<CachedImagePreview> preview;
+  final VoidCallback onDownload;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      insetPadding: const EdgeInsets.all(16),
+      backgroundColor: Colors.transparent,
+      elevation: 0,
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: FutureBuilder<CachedImagePreview>(
+              future: preview,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState != ConnectionState.done) {
+                  return const Center(
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  );
+                }
+                final bytes = snapshot.data?.bytes;
+                if (snapshot.hasError || bytes == null) {
+                  return const Center(
+                    child: Text(
+                      '图片预览失败',
+                      style: TextStyle(color: OsColors.muted),
+                    ),
+                  );
+                }
+                return InteractiveViewer(
+                  minScale: 1,
+                  maxScale: 5,
+                  child: SizedBox.expand(
+                    child: Image.memory(
+                      bytes,
+                      fit: BoxFit.contain,
+                      filterQuality: FilterQuality.high,
+                      errorBuilder: (_, _, _) => const Center(
+                        child: Text(
+                          '图片预览失败',
+                          style: TextStyle(color: OsColors.muted),
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          Positioned(
+            top: 8,
+            right: 8,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: const Color(0xCC1F2025),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: const Color(0x663B3D45)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    tooltip: '下载',
+                    onPressed: onDownload,
+                    icon: const Icon(Icons.download, color: OsColors.text),
+                  ),
+                  IconButton(
+                    tooltip: '关闭',
+                    onPressed: onClose,
+                    icon: const Icon(Icons.close, color: OsColors.text),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 Future<Size> _readImageSize(File file) async {
