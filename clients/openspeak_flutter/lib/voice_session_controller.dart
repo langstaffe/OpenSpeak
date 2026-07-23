@@ -9,6 +9,8 @@ import 'client_log.dart';
 import 'livekit_room_factory.dart';
 import 'microphone_activation.dart';
 import 'openspeak_api.dart';
+import 'rnnoise_audio_processor_stub.dart'
+    if (dart.library.js_interop) 'rnnoise_audio_processor_web.dart';
 
 const _minimumVoiceAudioRms = 0.0008;
 const _minimumWindowsVoiceAudioRms = 0.0001;
@@ -309,7 +311,7 @@ class VoiceScreenShare {
 }
 
 class _OpenSpeakAudioCaptureOptions extends lk.AudioCaptureOptions {
-  const _OpenSpeakAudioCaptureOptions({
+  _OpenSpeakAudioCaptureOptions({
     required bool noiseSuppressionEnabled,
     super.deviceId,
   }) : super(
@@ -320,6 +322,7 @@ class _OpenSpeakAudioCaptureOptions extends lk.AudioCaptureOptions {
          typingNoiseDetection: kIsWeb || noiseSuppressionEnabled,
          voiceIsolation: kIsWeb || noiseSuppressionEnabled,
          stopAudioCaptureOnMute: false,
+         processor: createRnnoiseAudioProcessor(),
        );
 
   @override

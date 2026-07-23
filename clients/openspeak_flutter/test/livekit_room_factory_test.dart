@@ -40,19 +40,23 @@ void main() {
   });
 
   test('Web microphone always keeps audio processing constraints', () {
-    final enabled = voiceAudioCaptureOptions(
+    final enabledOptions = voiceAudioCaptureOptions(
       noiseSuppressionEnabled: true,
       deviceId: 'microphone-1',
-    ).toMediaConstraintsMap();
-    final disabled = voiceAudioCaptureOptions(
+    );
+    final enabled = enabledOptions.toMediaConstraintsMap();
+    final disabledOptions = voiceAudioCaptureOptions(
       noiseSuppressionEnabled: false,
       deviceId: 'microphone-1',
-    ).toMediaConstraintsMap();
+    );
+    final disabled = disabledOptions.toMediaConstraintsMap();
     final systemDefault = voiceAudioCaptureOptions(
       noiseSuppressionEnabled: false,
     ).toMediaConstraintsMap();
 
     if (kIsWeb) {
+      expect(enabledOptions.processor?.name, 'rnnoise');
+      expect(disabledOptions.processor?.name, 'rnnoise');
       expect(enabled['deviceId'], isNotNull);
       expect(enabled['optional'], isNull);
       expect(enabled['echoCancellation'], isTrue);
@@ -69,6 +73,8 @@ void main() {
       expect(systemDefault['noiseSuppression'], isTrue);
       expect(systemDefault['voiceIsolation'], isTrue);
     } else {
+      expect(enabledOptions.processor, isNull);
+      expect(disabledOptions.processor, isNull);
       expect(enabled['optional'], isNotEmpty);
       expect(disabled['noiseSuppression'], isNull);
     }
