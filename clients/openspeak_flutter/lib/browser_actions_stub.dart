@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 bool browserSupportsWebRtc() => true;
@@ -17,6 +18,34 @@ String createBrowserObjectUrl(Uint8List bytes, String contentType) {
 }
 
 void revokeBrowserObjectUrl(String url) {}
+
+class BrowserAudioPlayer {
+  Stream<Duration> get onPositionChanged => const Stream.empty();
+
+  Stream<Duration> get onDurationChanged => const Stream.empty();
+
+  Stream<bool> get onPlayingChanged => const Stream.empty();
+
+  Stream<void> get onComplete => const Stream.empty();
+
+  void unlock() {}
+
+  Future<void> playUrl(String url) {
+    throw UnsupportedError('Browser audio is unavailable');
+  }
+
+  Future<void> resume() {
+    throw UnsupportedError('Browser audio is unavailable');
+  }
+
+  void pause() {}
+
+  void seek(Duration position) {}
+
+  void stop() {}
+
+  Future<void> dispose() async {}
+}
 
 void openBrowserUrl(String url) {
   throw UnsupportedError('Browser navigation is unavailable');

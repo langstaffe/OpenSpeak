@@ -81,6 +81,14 @@ bool webLoginNeedsPasswordPrompt(Object error, {required bool isWeb}) =>
     error is OpenSpeakException &&
     error.code == 'invalid_server_password';
 
+Future<T> loadAfterBrowserAudioUnlock<T>({
+  required void Function() unlock,
+  required Future<T> Function() load,
+}) {
+  unlock();
+  return load();
+}
+
 const savedConnectionsKey = 'openspeak.savedConnections.v1';
 const localProfileDisplayNameKey = 'openspeak.localProfileDisplayName.v1';
 const localProfileAvatarPendingSyncKey =
@@ -1222,6 +1230,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   final messageScrollController = ScrollController();
   final attachmentCache = AttachmentCacheService();
   final audioPlayer = AudioPlayer();
+  final browserAudioPlayer = BrowserAudioPlayer();
   final soundEffects = SoundEffectPlayer();
   final audioStreamProxy = AudioStreamProxy();
   final ownerIdentity = OwnerIdentityService();
@@ -1309,7 +1318,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   int connectionGeneration = 0;
   StreamSubscription<Duration>? audioPositionSub;
   StreamSubscription<Duration>? audioDurationSub;
-  StreamSubscription<PlayerState>? audioStateSub;
+  StreamSubscription<bool>? audioStateSub;
   StreamSubscription<void>? audioCompleteSub;
   Future<void> unreadPersist = Future.value();
   late final AudioDeviceMonitor audioDeviceMonitor;
@@ -1335,31 +1344,47 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     voiceSession.microphoneInputActive.addListener(onMicrophoneActivityChanged);
     pushToTalkHotkey.addListener(onPushToTalkHotkeyChanged);
     messageScrollController.addListener(onMessageScroll);
-    audioPositionSub = audioPlayer.onPositionChanged.listen((position) {
-      if (!mounted) return;
-      setState(() => audioPosition = position);
-    });
-    audioDurationSub = audioPlayer.onDurationChanged.listen((duration) {
-      if (!mounted) return;
-      setState(() => audioDuration = duration);
-    });
-    audioStateSub = audioPlayer.onPlayerStateChanged.listen((state) {
-      if (!mounted) return;
-      setState(() {
-        audioPlaying = state == PlayerState.playing;
-        loadingAudioFileId = null;
-      });
-    });
-    audioCompleteSub = audioPlayer.onPlayerComplete.listen((_) {
-      if (!mounted) return;
-      audioStreamProxy.cancel(activeAudioProxyId);
-      setState(() {
-        audioPlaying = false;
-        audioPosition = audioDuration;
-        loadingAudioFileId = null;
-        activeAudioProxyId = null;
-      });
-    });
+    audioPositionSub =
+        (kIsWeb
+                ? browserAudioPlayer.onPositionChanged
+                : audioPlayer.onPositionChanged)
+            .listen((position) {
+              if (!mounted) return;
+              setState(() => audioPosition = position);
+            });
+    audioDurationSub =
+        (kIsWeb
+                ? browserAudioPlayer.onDurationChanged
+                : audioPlayer.onDurationChanged)
+            .listen((duration) {
+              if (!mounted) return;
+              setState(() => audioDuration = duration);
+            });
+    audioStateSub =
+        (kIsWeb
+                ? browserAudioPlayer.onPlayingChanged
+                : audioPlayer.onPlayerStateChanged.map(
+                    (state) => state == PlayerState.playing,
+                  ))
+            .listen((playing) {
+              if (!mounted) return;
+              setState(() {
+                audioPlaying = playing;
+                loadingAudioFileId = null;
+              });
+            });
+    audioCompleteSub =
+        (kIsWeb ? browserAudioPlayer.onComplete : audioPlayer.onPlayerComplete)
+            .listen((_) {
+              if (!mounted) return;
+              audioStreamProxy.cancel(activeAudioProxyId);
+              setState(() {
+                audioPlaying = false;
+                audioPosition = audioDuration;
+                loadingAudioFileId = null;
+                activeAudioProxyId = null;
+              });
+            });
     if (kIsWeb) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) unawaited(login());
@@ -1395,6 +1420,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     final audioObjectUrl = activeAudioObjectUrl;
     activeAudioObjectUrl = null;
     if (audioObjectUrl != null) revokeBrowserObjectUrl(audioObjectUrl);
+    unawaited(browserAudioPlayer.dispose());
     unawaited(audioPlayer.dispose());
     unawaited(soundEffects.dispose());
     unawaited(audioStreamProxy.dispose());
@@ -5337,6 +5363,10 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         loadingAudioFileId == attachment.fileId) {
       return;
     }
+    if (kIsWeb) {
+      await toggleBrowserAudioAttachment(attachment);
+      return;
+    }
     if (activeAudioFileId == attachment.fileId && audioPlaying) {
       final pausedAt = audioPosition;
       if (activeAudioProxyId != null) {
@@ -5440,6 +5470,90 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     }
   }
 
+  Future<void> toggleBrowserAudioAttachment(ChatAttachment attachment) async {
+    if (activeAudioFileId == attachment.fileId && audioPlaying) {
+      final pausedAt = audioPosition;
+      browserAudioPlayer.pause();
+      if (!mounted) return;
+      setState(() {
+        audioPlaying = false;
+        audioPosition = pausedAt;
+      });
+      return;
+    }
+    if (activeAudioFileId == attachment.fileId) {
+      if (audioDuration > Duration.zero && audioPosition >= audioDuration) {
+        browserAudioPlayer.seek(Duration.zero);
+      }
+      try {
+        await browserAudioPlayer.resume();
+        if (!mounted) return;
+        setState(() => audioPlaying = true);
+      } catch (e) {
+        if (mounted) setState(() => error = '$e');
+      }
+      return;
+    }
+
+    if (activeAudioFileId != null) browserAudioPlayer.stop();
+    setState(() {
+      activeAudioFileId = attachment.fileId;
+      loadingAudioFileId = attachment.fileId;
+      audioPlaying = false;
+      audioPosition = Duration.zero;
+      audioDuration = Duration.zero;
+    });
+    try {
+      final auth = session;
+      final client = api;
+      if (auth == null || client == null) {
+        throw OpenSpeakException('未连接服务器');
+      }
+      final bytes = await loadAfterBrowserAudioUnlock(
+        unlock: browserAudioPlayer.unlock,
+        load: () => downloadAttachmentBytes(attachment),
+      );
+      if (!mounted || activeAudioFileId != attachment.fileId) return;
+      final previousObjectUrl = activeAudioObjectUrl;
+      if (previousObjectUrl != null) {
+        revokeBrowserObjectUrl(previousObjectUrl);
+      }
+      final url = createBrowserObjectUrl(
+        bytes,
+        attachment.contentType.isEmpty
+            ? contentTypeForPath(attachment.displayName)
+            : attachment.contentType,
+      );
+      activeAudioObjectUrl = url;
+      await browserAudioPlayer.playUrl(url);
+      if (!mounted || activeAudioFileId != attachment.fileId) return;
+      setState(() {
+        loadingAudioFileId = null;
+        audioPlaying = true;
+      });
+    } catch (e) {
+      if (!mounted || activeAudioFileId != attachment.fileId) return;
+      browserAudioPlayer.stop();
+      final objectUrl = activeAudioObjectUrl;
+      activeAudioObjectUrl = null;
+      if (objectUrl != null) revokeBrowserObjectUrl(objectUrl);
+      if (attachment.direct && isDirectFileExpiredError(e)) {
+        setState(() {
+          expiredDirectFileIds.add(attachment.fileId);
+          loadingAudioFileId = null;
+          activeAudioFileId = null;
+          error = '文件已过期';
+        });
+      } else {
+        setState(() {
+          loadingAudioFileId = null;
+          activeAudioFileId = null;
+          error = '$e';
+        });
+      }
+    }
+  }
+
   bool isRecoverableAudioProxyError(Object error) {
     if (activeAudioProxyId == null) return false;
     final message = error.toString();
@@ -5467,26 +5581,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
 
   Future<void> prepareAudioSource(ChatAttachment attachment) async {
     activeAudioProxyId = null;
-    final previousObjectUrl = activeAudioObjectUrl;
-    activeAudioObjectUrl = null;
-    if (previousObjectUrl != null) revokeBrowserObjectUrl(previousObjectUrl);
-    if (kIsWeb) {
-      final bytes = await downloadAttachmentBytes(attachment);
-      final url = createBrowserObjectUrl(
-        bytes,
-        attachment.contentType.isEmpty
-            ? contentTypeForPath(attachment.displayName)
-            : attachment.contentType,
-      );
-      activeAudioObjectUrl = url;
-      await audioPlayer.setSourceUrl(
-        url,
-        mimeType: attachment.contentType.isEmpty
-            ? contentTypeForPath(attachment.displayName)
-            : attachment.contentType,
-      );
-      return;
-    }
     final localSource = await localAudioSourceFile(attachment);
     if (localSource != null) {
       await audioPlayer.setSourceDeviceFile(localSource.path);
@@ -5589,7 +5683,11 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   }
 
   Future<void> seekAudio(Duration position) async {
-    await audioPlayer.seek(position);
+    if (kIsWeb) {
+      browserAudioPlayer.seek(position);
+    } else {
+      await audioPlayer.seek(position);
+    }
     if (!mounted) return;
     setState(() => audioPosition = position);
   }
@@ -5600,7 +5698,11 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     final objectUrl = activeAudioObjectUrl;
     activeAudioObjectUrl = null;
     if (objectUrl != null) revokeBrowserObjectUrl(objectUrl);
-    await audioPlayer.stop();
+    if (kIsWeb) {
+      browserAudioPlayer.stop();
+    } else {
+      await audioPlayer.stop();
+    }
     if (!mounted) return;
     setState(() {
       activeAudioFileId = null;
