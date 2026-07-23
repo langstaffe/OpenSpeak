@@ -92,6 +92,8 @@ class OpenSpeakApi {
 
   Uri baseUri;
   bool _latencyConnectionWarmed = false;
+  final Map<String, ({Uri uri, bool withAuthorization, DateTime expiresAt})>
+  _webDownloadTargets = {};
 
   Uri apiUri(String path, [Map<String, String>? query]) {
     return baseUri.replace(
@@ -1729,10 +1731,13 @@ class OpenSpeakApi {
     TransferProgress? onProgress,
     TransferCancelToken? cancelToken,
   }) async {
+    final target = await _downloadTarget(token, path);
     final client = http.Client();
     try {
-      final request = http.Request('GET', apiUri(path))
-        ..headers['Authorization'] = 'Bearer $token';
+      final request = http.Request('GET', target.uri);
+      if (target.withAuthorization) {
+        request.headers['Authorization'] = 'Bearer $token';
+      }
       final response = await client.send(request);
       if (response.statusCode < 200 || response.statusCode >= 300) {
         final body = await response.stream.bytesToString();
@@ -1849,13 +1854,14 @@ class OpenSpeakApi {
     required int start,
     required int endInclusive,
   }) async {
+    final target = await _downloadTarget(token, path);
     Object? lastError;
     for (var attempt = 0; attempt < 2; attempt += 1) {
       try {
         final response = await http.get(
-          apiUri(path),
+          target.uri,
           headers: {
-            'Authorization': 'Bearer $token',
+            if (target.withAuthorization) 'Authorization': 'Bearer $token',
             'Range': 'bytes=$start-$endInclusive',
           },
         );
@@ -1873,6 +1879,47 @@ class OpenSpeakApi {
       }
     }
     throw lastError ?? OpenSpeakException('range request failed');
+  }
+
+  Future<({Uri uri, bool withAuthorization})> _downloadTarget(
+    String token,
+    String path,
+  ) async {
+    final authenticated = (uri: apiUri(path), withAuthorization: true);
+    if (!kIsWeb) return authenticated;
+    final key = '$token\n$baseUri\n$path';
+    final now = DateTime.now();
+    final cached = _webDownloadTargets[key];
+    if (cached != null &&
+        cached.expiresAt.isAfter(now.add(const Duration(seconds: 30)))) {
+      return (uri: cached.uri, withAuthorization: cached.withAuthorization);
+    }
+    final json = await request(
+      'GET',
+      path,
+      token: token,
+      query: const {'external_url': '1'},
+    );
+    final rawUrl = json is Map ? json['url'] as String? ?? '' : '';
+    if (rawUrl.isEmpty) {
+      final currentAuthenticated = (uri: apiUri(path), withAuthorization: true);
+      _webDownloadTargets[key] = (
+        uri: currentAuthenticated.uri,
+        withAuthorization: true,
+        expiresAt: DateTime.utc(9999),
+      );
+      return currentAuthenticated;
+    }
+    final uri = Uri.tryParse(rawUrl);
+    if (uri == null || uri.scheme != 'https' || uri.host.isEmpty) {
+      throw OpenSpeakException('服务器返回了无效的附件下载地址');
+    }
+    _webDownloadTargets[key] = (
+      uri: uri,
+      withAuthorization: false,
+      expiresAt: now.add(const Duration(minutes: 4)),
+    );
+    return (uri: uri, withAuthorization: false);
   }
 
   Future<OpenSpeakSocket> openWebSocket(

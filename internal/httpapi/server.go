@@ -3145,7 +3145,17 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request, authCtx aut
 			writeError(w, http.StatusBadGateway, "file_node_unavailable", "attachment file node configuration is invalid")
 			return
 		}
+		if r.URL.Query().Get("external_url") == "1" {
+			w.Header().Set("Cache-Control", "no-store")
+			writeJSON(w, http.StatusOK, map[string]string{"url": downloadURL})
+			return
+		}
 		http.Redirect(w, r, downloadURL, http.StatusTemporaryRedirect)
+		return
+	}
+	if r.URL.Query().Get("external_url") == "1" {
+		w.Header().Set("Cache-Control", "no-store")
+		writeJSON(w, http.StatusOK, map[string]string{"url": ""})
 		return
 	}
 	absPath := filepath.Join(server.FileRoot, filepath.FromSlash(file.RelativePath))

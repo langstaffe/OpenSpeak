@@ -10,6 +10,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -1719,6 +1720,20 @@ func TestChannelFileUploadUsesServerE2EE(t *testing.T) {
 		t.Fatalf("unexpected relative path %q", result.File.RelativePath)
 	}
 
+	resolve := httptest.NewRequest(http.MethodGet, "/api/v1/files/"+result.File.ID+"/download?external_url=1", nil)
+	resolve.Header.Set("Authorization", "Bearer "+env.token)
+	resolveResponse := httptest.NewRecorder()
+	env.server.ServeHTTP(resolveResponse, resolve)
+	var resolved struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(resolveResponse.Body.Bytes(), &resolved); err != nil || resolveResponse.Code != http.StatusOK || resolved.URL != "" {
+		t.Fatalf("local download resolution = %d %#v, err = %v", resolveResponse.Code, resolved, err)
+	}
+	if resolveResponse.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("local download resolution cache control = %q", resolveResponse.Header().Get("Cache-Control"))
+	}
+
 	download := httptest.NewRequest(http.MethodGet, "/api/v1/files/"+result.File.ID+"/download", nil)
 	download.Header.Set("Authorization", "Bearer "+env.token)
 	downloadResponse := newDeadlineResponseRecorder()
@@ -1808,6 +1823,28 @@ func TestExternalChannelAttachmentUploadAndDownloadRedirect(t *testing.T) {
 	}
 	if result.File.EncryptionMode != "e2ee" || result.File.Metadata["plaintext_size_bytes"] != "27" {
 		t.Fatalf("external E2EE metadata = %#v", result.File)
+	}
+	resolveRequest := httptest.NewRequest(http.MethodGet, "/api/v1/files/"+result.File.ID+"/download?external_url=1", nil)
+	resolveRequest.Header.Set("Authorization", "Bearer "+env.token)
+	resolveResponse := httptest.NewRecorder()
+	env.server.ServeHTTP(resolveResponse, resolveRequest)
+	var resolved struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(resolveResponse.Body.Bytes(), &resolved); err != nil || resolveResponse.Code != http.StatusOK || !strings.HasPrefix(resolved.URL, nodeServer.URL) {
+		t.Fatalf("external download resolution = %d %#v, err = %v", resolveResponse.Code, resolved, err)
+	}
+	if resolveResponse.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("external download resolution cache control = %q", resolveResponse.Header().Get("Cache-Control"))
+	}
+	resolvedResponse, err := http.Get(resolved.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedPayload, readErr := io.ReadAll(resolvedResponse.Body)
+	resolvedResponse.Body.Close()
+	if readErr != nil || resolvedResponse.StatusCode != http.StatusOK || !bytes.Equal(resolvedPayload, payload) {
+		t.Fatalf("resolved download = %d payload=%d, err = %v", resolvedResponse.StatusCode, len(resolvedPayload), readErr)
 	}
 	downloadRequest := httptest.NewRequest(http.MethodGet, "/api/v1/files/"+result.File.ID+"/download", nil)
 	downloadRequest.Header.Set("Authorization", "Bearer "+env.token)
@@ -2702,6 +2739,28 @@ func TestDirectE2EETextAndAttachmentUseOnlineDeviceEnvelopes(t *testing.T) {
 	}
 	if externalFile.FileNodeID != node.ID || externalFile.EncryptionMode != "e2ee" {
 		t.Fatalf("external direct file = %#v", externalFile)
+	}
+	resolveRequest := httptest.NewRequest(http.MethodGet, "/api/v1/direct-files/"+externalFile.ID+"/download?external_url=1", nil)
+	resolveRequest.Header.Set("Authorization", "Bearer "+recipientToken)
+	resolveResponse := httptest.NewRecorder()
+	env.server.ServeHTTP(resolveResponse, resolveRequest)
+	var resolved struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(resolveResponse.Body.Bytes(), &resolved); err != nil || resolveResponse.Code != http.StatusOK || !strings.HasPrefix(resolved.URL, nodeServer.URL) {
+		t.Fatalf("external direct download resolution = %d %#v, err = %v", resolveResponse.Code, resolved, err)
+	}
+	if resolveResponse.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("external direct download resolution cache control = %q", resolveResponse.Header().Get("Cache-Control"))
+	}
+	resolvedResponse, err := http.Get(resolved.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedPayload, readErr := io.ReadAll(resolvedResponse.Body)
+	resolvedResponse.Body.Close()
+	if readErr != nil || resolvedResponse.StatusCode != http.StatusOK || !bytes.Equal(resolvedPayload, externalCiphertext) {
+		t.Fatalf("resolved direct download = %d payload=%d, err = %v", resolvedResponse.StatusCode, len(resolvedPayload), readErr)
 	}
 	for _, event := range []realtime.Event{
 		readEventType(t, senderWS, "direct.message_created"),
