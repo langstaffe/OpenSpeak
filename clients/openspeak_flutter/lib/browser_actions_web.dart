@@ -5,7 +5,6 @@
 import 'dart:async';
 import 'dart:html' as html;
 import 'dart:js_interop';
-import 'dart:math';
 import 'dart:typed_data';
 
 @JS('RTCPeerConnection')
@@ -101,9 +100,9 @@ class BrowserAudioPlayer {
   final _complete = StreamController<void>.broadcast();
   final _subscriptions = <StreamSubscription<html.Event>>[];
   final _streamReaders = <String, BrowserAudioRangeReader>{};
-  final _random = Random.secure();
   StreamSubscription<html.MessageEvent>? _workerSubscription;
   String? _activeStreamId;
+  var _nextStreamId = 0;
   var _priming = true;
   var _unlocked = false;
 
@@ -150,7 +149,7 @@ class BrowserAudioPlayer {
     }
     _clearStreamSource();
     final sourceId =
-        '${DateTime.now().microsecondsSinceEpoch}-${_random.nextInt(1 << 32)}';
+        '${DateTime.now().microsecondsSinceEpoch}-${_nextStreamId++}';
     _activeStreamId = sourceId;
     _streamReaders[sourceId] = readRange;
     final baseUri = Uri.parse(
