@@ -33,6 +33,51 @@ void main() {
     expect(useMobileWebLayout(isWeb: false, width: 320), isFalse);
   });
 
+  testWidgets('mobile channel card separates chat and voice gestures', (
+    tester,
+  ) async {
+    var opens = 0;
+    var joins = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MobileChannelCard(
+            channel: Channel(id: 'one', name: '1', sortOrder: 0),
+            selected: false,
+            unreadCount: 0,
+            mentionCount: 0,
+            members: const [],
+            voiceStatesByUserId: const {},
+            api: null,
+            avatarToken: null,
+            onOpen: () => opens += 1,
+            onDoubleTap: () => joins += 1,
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byType(MobileChannelCard));
+    await tester.pumpAndSettle();
+    expect(opens, 0);
+    expect(joins, 0);
+
+    final openButton = find.byKey(const ValueKey('mobile-channel-open-one'));
+    expect(tester.getSize(openButton), const Size.square(34));
+    await tester.tap(openButton);
+    await tester.pump();
+    expect(opens, 1);
+
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.tap(find.byType(MobileChannelCard));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.byType(MobileChannelCard));
+    await tester.pump();
+    expect(opens, 1);
+    expect(joins, 1);
+    await tester.pump(const Duration(milliseconds: 400));
+  });
+
   testWidgets('all sound effects are bundled as WAV files', (_) async {
     for (final effect in SoundEffect.values) {
       final bytes = await rootBundle.load('assets/${effect.asset}');

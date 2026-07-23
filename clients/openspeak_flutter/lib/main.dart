@@ -9157,8 +9157,10 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
           child: Column(
             children: [
               Expanded(child: body),
-              buildMobileVoiceStatusBar(),
-              buildMobileNavigationBar(),
+              if (!mobileChatOpen) ...[
+                buildMobileVoiceStatusBar(),
+                buildMobileNavigationBar(),
+              ],
             ],
           ),
         ),
@@ -9262,9 +9264,9 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                         voiceStatesByUserId: voiceStatesByUserId,
                         api: api,
                         avatarToken: session?.token,
-                        onTap: () => unawaited(openMobileChannel(channel)),
+                        onOpen: () => unawaited(openMobileChannel(channel)),
                         onDoubleTap: () =>
-                            unawaited(openMobileChannel(channel, join: true)),
+                            unawaited(loadChannel(channel, join: true)),
                         onLongPressStart:
                             hasServerPermission('channel.edit') ||
                                 hasServerPermission('channel.delete')
@@ -18733,7 +18735,7 @@ class MobileChannelCard extends StatelessWidget {
     required this.voiceStatesByUserId,
     required this.api,
     required this.avatarToken,
-    required this.onTap,
+    required this.onOpen,
     required this.onDoubleTap,
     this.onLongPressStart,
   });
@@ -18746,7 +18748,7 @@ class MobileChannelCard extends StatelessWidget {
   final Map<String, VoiceState> voiceStatesByUserId;
   final OpenSpeakApi? api;
   final String? avatarToken;
-  final VoidCallback onTap;
+  final VoidCallback onOpen;
   final VoidCallback onDoubleTap;
   final GestureLongPressStartCallback? onLongPressStart;
 
@@ -18770,7 +18772,6 @@ class MobileChannelCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(14),
           clipBehavior: Clip.antiAlias,
           child: InkWell(
-            onTap: onTap,
             onDoubleTap: onDoubleTap,
             child: Container(
               constraints: const BoxConstraints(minHeight: 58),
@@ -18816,10 +18817,22 @@ class MobileChannelCard extends StatelessWidget {
                         compact: true,
                       ),
                       const SizedBox(width: 6),
-                      const Icon(
-                        Icons.chevron_right_rounded,
-                        color: OsColors.dim,
-                        size: 24,
+                      IconButton(
+                        key: ValueKey('mobile-channel-open-${channel.id}'),
+                        tooltip: '进入频道聊天',
+                        onPressed: onOpen,
+                        style: IconButton.styleFrom(
+                          backgroundColor: OsColors.sidebarBottom,
+                          foregroundColor: OsColors.dim,
+                          side: const BorderSide(color: OsColors.panelBorder),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(9),
+                          ),
+                          fixedSize: const Size(34, 34),
+                          minimumSize: const Size(34, 34),
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        ),
+                        icon: const Icon(Icons.chevron_right_rounded, size: 24),
                       ),
                     ],
                   ),
