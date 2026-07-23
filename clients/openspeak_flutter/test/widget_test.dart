@@ -1402,6 +1402,13 @@ void main() {
       MicrophoneActivationModeValue.parse(null),
       MicrophoneActivationMode.continuous,
     );
+    for (final mode in MicrophoneActivationMode.values) {
+      expect(
+        microphoneActivationModeForPlatform(mode, isWeb: true),
+        MicrophoneActivationMode.continuous,
+      );
+      expect(microphoneActivationModeForPlatform(mode, isWeb: false), mode);
+    }
     expect(
       microphoneActivationGateOpen(
         mode: MicrophoneActivationMode.pushToTalk,
@@ -1913,9 +1920,9 @@ void main() {
     );
 
     expect(find.text('麦克风激活方式'), findsOneWidget);
-    expect(find.text('按键通话'), findsOneWidget);
+    expect(find.text('按键通话'), kIsWeb ? findsNothing : findsOneWidget);
     expect(find.text('持续传输'), findsOneWidget);
-    expect(find.text('语音阈值'), findsOneWidget);
+    expect(find.text('语音阈值'), kIsWeb ? findsNothing : findsOneWidget);
     expect(find.textContaining('房间存在其他参与者'), findsOneWidget);
     expect(find.text('音效'), findsOneWidget);
     expect(find.text('100%'), findsOneWidget);
@@ -1931,22 +1938,24 @@ void main() {
     effectSlider.onChangeEnd!(0.42);
     expect(previewVolume, 0.42);
 
-    await tester.tap(find.text('语音阈值'));
-    await tester.pumpAndSettle();
-    expect(find.text('输入音量与传输阈值'), findsOneWidget);
-    final liveLevel = find.byKey(const ValueKey('microphone-current-level'));
-    expect(liveLevel, findsOneWidget);
-    expect(tester.getSize(liveLevel).width, greaterThan(100));
-    expect(
-      tester.widget<FractionallySizedBox>(liveLevel).widthFactor,
-      closeTo(0.68, 0.001),
-    );
-    microphoneLevel.value = 0.12;
-    await tester.pump();
-    expect(
-      tester.widget<FractionallySizedBox>(liveLevel).widthFactor,
-      closeTo(0.12, 0.001),
-    );
+    if (!kIsWeb) {
+      await tester.tap(find.text('语音阈值'));
+      await tester.pumpAndSettle();
+      expect(find.text('输入音量与传输阈值'), findsOneWidget);
+      final liveLevel = find.byKey(const ValueKey('microphone-current-level'));
+      expect(liveLevel, findsOneWidget);
+      expect(tester.getSize(liveLevel).width, greaterThan(100));
+      expect(
+        tester.widget<FractionallySizedBox>(liveLevel).widthFactor,
+        closeTo(0.68, 0.001),
+      );
+      microphoneLevel.value = 0.12;
+      await tester.pump();
+      expect(
+        tester.widget<FractionallySizedBox>(liveLevel).widthFactor,
+        closeTo(0.12, 0.001),
+      );
+    }
 
     devices = [
       ...devices,

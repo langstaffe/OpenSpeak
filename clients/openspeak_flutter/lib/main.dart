@@ -2112,10 +2112,15 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     final savedActivationMode = MicrophoneActivationModeValue.parse(
       prefs.getString(microphoneActivationModeKey),
     );
-    microphoneActivationMode =
-        kIsWeb && savedActivationMode == MicrophoneActivationMode.pushToTalk
-        ? MicrophoneActivationMode.continuous
-        : savedActivationMode;
+    microphoneActivationMode = microphoneActivationModeForPlatform(
+      savedActivationMode,
+    );
+    if (microphoneActivationMode != savedActivationMode) {
+      await prefs.setString(
+        microphoneActivationModeKey,
+        microphoneActivationMode.preferenceValue,
+      );
+    }
     microphoneThreshold = (prefs.getDouble(microphoneThresholdKey) ?? 0.4)
         .clamp(0.0, 1.0)
         .toDouble();
@@ -8677,10 +8682,13 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     required MicrophoneHotkeyBinding? pushToTalkHotkeyBinding,
     required double effectVolume,
   }) {
+    final effectiveActivationMode = microphoneActivationModeForPlatform(
+      activationMode,
+    );
     setState(() {
       selectedAudioInputDeviceId = inputDeviceId;
       selectedAudioOutputDeviceId = outputDeviceId;
-      microphoneActivationMode = activationMode;
+      microphoneActivationMode = effectiveActivationMode;
       microphoneThreshold = threshold.clamp(0.0, 1.0).toDouble();
       microphonePushToTalkHotkey = pushToTalkHotkeyBinding;
       soundEffectVolume = effectVolume.clamp(0.0, 1.0).toDouble();
@@ -8691,7 +8699,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       await persistAudioDevicePreferences();
       await prefs.setString(
         microphoneActivationModeKey,
-        activationMode.preferenceValue,
+        effectiveActivationMode.preferenceValue,
       );
       await prefs.setDouble(microphoneThresholdKey, microphoneThreshold);
       await prefs.setDouble(soundEffectVolumeKey, soundEffectVolume);
@@ -8708,12 +8716,12 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         outputDeviceId: outputDeviceId,
       );
       await voiceSession.configureMicrophoneActivation(
-        mode: activationMode,
+        mode: effectiveActivationMode,
         threshold: microphoneThreshold,
       );
       final hotkeyReady = await _applyPushToTalkHotkeyRegistration();
       if (!hotkeyReady &&
-          activationMode == MicrophoneActivationMode.pushToTalk &&
+          effectiveActivationMode == MicrophoneActivationMode.pushToTalk &&
           pushToTalkHotkeyBinding != null) {
         throw OpenSpeakException(pushToTalkHotkey.error ?? '无法注册系统级按键通话快捷键');
       }
@@ -12048,20 +12056,23 @@ class MicrophoneActivationCard extends StatelessWidget {
                 ? const _ActivationHint(text: '只有进入语音且房间存在其他参与者时才会上传音频。')
                 : null,
           ),
-          const SizedBox(height: 7),
-          MicrophoneActivationOption(
-            selected: mode == MicrophoneActivationMode.voiceThreshold,
-            title: '语音阈值',
-            subtitle: '输入音量超过阈值时自动传输',
-            onTap: () => onModeChanged(MicrophoneActivationMode.voiceThreshold),
-            expanded: mode == MicrophoneActivationMode.voiceThreshold
-                ? MicrophoneThresholdMeter(
-                    level: microphoneInputLevel,
-                    threshold: threshold,
-                    onChanged: onThresholdChanged,
-                  )
-                : null,
-          ),
+          if (!kIsWeb) ...[
+            const SizedBox(height: 7),
+            MicrophoneActivationOption(
+              selected: mode == MicrophoneActivationMode.voiceThreshold,
+              title: '语音阈值',
+              subtitle: '输入音量超过阈值时自动传输',
+              onTap: () =>
+                  onModeChanged(MicrophoneActivationMode.voiceThreshold),
+              expanded: mode == MicrophoneActivationMode.voiceThreshold
+                  ? MicrophoneThresholdMeter(
+                      level: microphoneInputLevel,
+                      threshold: threshold,
+                      onChanged: onThresholdChanged,
+                    )
+                  : null,
+            ),
+          ],
         ],
       ),
     );

@@ -126,6 +126,11 @@ extension MicrophoneActivationModeValue on MicrophoneActivationMode {
   };
 }
 
+MicrophoneActivationMode microphoneActivationModeForPlatform(
+  MicrophoneActivationMode saved, {
+  bool isWeb = kIsWeb,
+}) => isWeb ? MicrophoneActivationMode.continuous : saved;
+
 class MicrophoneHotkeyBinding {
   const MicrophoneHotkeyBinding({
     required this.usbHidUsage,
