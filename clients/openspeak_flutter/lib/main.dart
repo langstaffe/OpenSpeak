@@ -8901,7 +8901,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
 
   @override
   Widget build(BuildContext context) {
-    if (kIsWeb && MediaQuery.sizeOf(context).width < 900) {
+    if (kIsWeb && MediaQuery.sizeOf(context).width < 720) {
       return const Scaffold(
         body: Center(child: Text('OpenSpeak 网页端暂不支持小尺寸窗口，请使用桌面浏览器并放大窗口。')),
       );
