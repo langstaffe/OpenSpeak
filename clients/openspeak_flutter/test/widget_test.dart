@@ -26,6 +26,12 @@ void main() {
     expect(browserSupportsWebRtc(), isTrue);
   });
 
+  test('mobile layout applies only to Web widths below 720', () {
+    expect(useMobileWebLayout(isWeb: true, width: 719), isTrue);
+    expect(useMobileWebLayout(isWeb: true, width: 720), isFalse);
+    expect(useMobileWebLayout(isWeb: false, width: 320), isFalse);
+  });
+
   testWidgets('all sound effects are bundled as WAV files', (_) async {
     for (final effect in SoundEffect.values) {
       final bytes = await rootBundle.load('assets/${effect.asset}');
@@ -3300,6 +3306,52 @@ void main() {
       greaterThan(compactHeight),
     );
     expect(find.text('右侧内容'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('settings body stacks navigation on mobile widths', (
+    WidgetTester tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 700));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Padding(
+            padding: const EdgeInsets.all(16),
+            child: OsSplitSettingsBody(
+              navigation: [
+                OsSettingsNavEntry(
+                  icon: Icons.person_outline_rounded,
+                  label: '个人资料',
+                  selected: true,
+                  onTap: () {},
+                ),
+                OsSettingsNavEntry(
+                  icon: Icons.headphones_rounded,
+                  label: '音频设备',
+                  selected: false,
+                  onTap: () {},
+                ),
+              ],
+              content: const OsSettingsPage(
+                icon: Icons.person_rounded,
+                title: '个人资料详情',
+                subtitle: '设置本机身份',
+                child: Text('下方内容'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(
+      tester.getCenter(find.text('个人资料')).dy,
+      lessThan(tester.getCenter(find.text('个人资料详情')).dy),
+    );
+    expect(find.text('下方内容'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

@@ -65,6 +65,10 @@ const defaultServerUrl = String.fromEnvironment(
   'OPENSPEAK_DEFAULT_SERVER_URL',
   defaultValue: 'http://127.0.0.1:27410',
 );
+const mobileWebBreakpoint = 720.0;
+
+bool useMobileWebLayout({required bool isWeb, required double width}) =>
+    isWeb && width < mobileWebBreakpoint;
 
 String initialServerUrl() {
   if (!kIsWeb) return defaultServerUrl;
@@ -1266,6 +1270,9 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   bool screenShareActionInFlight = false;
   bool screenShareCollapsed = false;
   bool screenShareWindowOpen = false;
+  int mobileTabIndex = 0;
+  bool mobileChatOpen = false;
+  bool mobileVoiceSheetOpen = false;
   lk.VideoTrack? activeScreenShareTrack;
   OwnerStatus? selectedServerOwnerStatus;
   String currentServerRole = 'user';
@@ -1880,6 +1887,8 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         servers = nextServers;
         selectedServer = nextServers.isEmpty ? null : nextServers.first;
         selectedChannel = null;
+        mobileTabIndex = 0;
+        mobileChatOpen = false;
         activity.clear();
         wsConnected = false;
       });
@@ -1933,6 +1942,8 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       serverMenuOpen = false;
       selectedServer = null;
       selectedChannel = null;
+      mobileTabIndex = 0;
+      mobileChatOpen = false;
       selectedConnection = null;
       servers = [];
       channels = [];
@@ -2502,6 +2513,8 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       channels = [];
       chatScope = ChatScope.channel;
       selectedDirectUserId = null;
+      mobileTabIndex = 0;
+      mobileChatOpen = false;
       channelMessages.clear();
       channelKeys.clear();
       directMessageKeys.clear();
@@ -9048,11 +9061,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
 
   @override
   Widget build(BuildContext context) {
-    if (kIsWeb && MediaQuery.sizeOf(context).width < 720) {
-      return const Scaffold(
-        body: Center(child: Text('OpenSpeak 网页端暂不支持小尺寸窗口，请使用桌面浏览器并放大窗口。')),
-      );
-    }
     if (kIsWeb && session == null) {
       return Scaffold(
         backgroundColor: OsColors.rail,
@@ -9078,6 +9086,12 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         ),
       );
     }
+    if (useMobileWebLayout(
+      isWeb: kIsWeb,
+      width: MediaQuery.sizeOf(context).width,
+    )) {
+      return Scaffold(body: buildMobileShell());
+    }
     return Scaffold(body: buildShell());
   }
 
@@ -9088,6 +9102,731 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         buildChannelPane(),
         Expanded(child: buildMainPane()),
       ],
+    );
+  }
+
+  Map<String, VoiceState> displayVoiceStatesByUserId() {
+    final participantUserIds = voiceSession.snapshot.liveKitParticipantUserIds;
+    final speakingUserIds = voiceSession.snapshot.liveKitSpeakingUserIds;
+    return {
+      for (final state in presence.voiceStates)
+        state.userId: VoiceState(
+          serverId: state.serverId,
+          userId: state.userId,
+          displayName: state.displayName,
+          channelId: state.channelId,
+          muted: state.muted,
+          deafened: state.deafened,
+          speaking: channelMemberIsSpeaking(
+            state.userId,
+            participantUserIds,
+            speakingUserIds,
+          ),
+          screenSharing: state.screenSharing,
+          screenShareResolution: state.screenShareResolution,
+          screenShareFPS: state.screenShareFPS,
+          screenShareMediaNodeId: state.screenShareMediaNodeId,
+        ),
+    };
+  }
+
+  Widget buildMobileShell() {
+    final body = mobileChatOpen
+        ? buildMainPane(onBack: () => setState(() => mobileChatOpen = false))
+        : mobileTabIndex == 0
+        ? buildMobileChannelList()
+        : buildMobileDirectList();
+    return PopScope(
+      canPop: !mobileChatOpen,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && mobileChatOpen) {
+          setState(() => mobileChatOpen = false);
+        }
+      },
+      child: SafeArea(
+        child: ColoredBox(
+          color: OsColors.content,
+          child: Column(
+            children: [
+              Expanded(child: body),
+              buildMobileVoiceStatusBar(),
+              buildMobileNavigationBar(),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget buildMobileServerHeader() {
+    final server = selectedServer;
+    if (server == null) return const SizedBox.shrink();
+    return Container(
+      height: 58,
+      padding: const EdgeInsets.only(left: 14, right: 8),
+      decoration: const BoxDecoration(
+        color: OsColors.sidebar,
+        border: Border(bottom: BorderSide(color: OsColors.divider)),
+      ),
+      child: Row(
+        children: [
+          OsUserAvatar(
+            displayName: server.name,
+            size: 34,
+            avatarUri: server.avatarVersion > 0
+                ? api?.serverAvatarUri(
+                    server.id,
+                    server.avatarVersion,
+                    small: true,
+                  )
+                : null,
+            backgroundColor: OsColors.blurple,
+          ),
+          const SizedBox(width: 11),
+          Expanded(
+            child: Text(
+              server.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: OsColors.text,
+                fontSize: 16,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          Tooltip(
+            message: '服务器菜单',
+            child: Material(
+              color: serverMenuOpen ? OsColors.rowSelected : Colors.transparent,
+              borderRadius: BorderRadius.circular(8),
+              child: InkWell(
+                onTapUp: (details) => unawaited(toggleServerMenu(details)),
+                borderRadius: BorderRadius.circular(8),
+                child: const SizedBox(
+                  width: 42,
+                  height: 42,
+                  child: Icon(Icons.menu, color: OsColors.text, size: 23),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> openMobileChannel(Channel channel, {bool join = false}) async {
+    await loadChannel(channel, join: join);
+    if (!mounted ||
+        selectedChannel?.id != channel.id ||
+        chatScope != ChatScope.channel) {
+      return;
+    }
+    setState(() => mobileChatOpen = true);
+  }
+
+  Widget buildMobileChannelList() {
+    final voiceStatesByUserId = displayVoiceStatesByUserId();
+    return ColoredBox(
+      color: OsColors.sidebar,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          buildMobileServerHeader(),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 16, 16, 4),
+            child: Text(
+              '频道',
+              style: TextStyle(
+                color: OsColors.text,
+                fontSize: 20,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+          Expanded(
+            child: channels.isEmpty
+                ? const ChatEmptyState(title: '还没有频道', subtitle: '请从服务器菜单创建频道')
+                : ListView.builder(
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
+                    itemCount: channels.length,
+                    itemBuilder: (context, index) {
+                      final channel = channels[index];
+                      return MobileChannelCard(
+                        channel: channel,
+                        selected:
+                            chatScope == ChatScope.channel &&
+                            selectedChannel?.id == channel.id,
+                        unreadCount: channelUnreadCounts[channel.id] ?? 0,
+                        mentionCount: channelMentionCounts[channel.id] ?? 0,
+                        members: presence.users
+                            .where(
+                              (user) =>
+                                  user.online &&
+                                  user.currentChannelId == channel.id,
+                            )
+                            .toList(),
+                        voiceStatesByUserId: voiceStatesByUserId,
+                        api: api,
+                        avatarToken: session?.token,
+                        onTap: () => unawaited(openMobileChannel(channel)),
+                        onDoubleTap: () =>
+                            unawaited(openMobileChannel(channel, join: true)),
+                        onLongPressStart:
+                            hasServerPermission('channel.edit') ||
+                                hasServerPermission('channel.delete')
+                            ? (details) => unawaited(
+                                showChannelContextMenu(
+                                  details.globalPosition,
+                                  channel: channel,
+                                ),
+                              )
+                            : null,
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void openMobileDirectChat(PresenceUser user) {
+    startDirectChat(user);
+    setState(() {
+      mobileTabIndex = 1;
+      mobileChatOpen = true;
+    });
+  }
+
+  Widget buildMobileDirectList() {
+    final voiceStatesByUserId = displayVoiceStatesByUserId();
+    final users = presence.users
+        .where((user) => user.online && user.userId != session?.user.id)
+        .toList();
+    return ColoredBox(
+      color: OsColors.sidebar,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          buildMobileServerHeader(),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 16, 16, 4),
+            child: Text(
+              '私聊',
+              style: TextStyle(
+                color: OsColors.text,
+                fontSize: 20,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+          Expanded(
+            child: users.isEmpty
+                ? const ChatEmptyState(
+                    title: '暂无在线用户',
+                    subtitle: '其他用户上线后会显示在这里',
+                  )
+                : ListView.separated(
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
+                    itemCount: users.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 8),
+                    itemBuilder: (context, index) {
+                      final user = users[index];
+                      return MobileDirectUserTile(
+                        user: user,
+                        voiceState: voiceStatesByUserId[user.userId],
+                        channelName: channelForId(
+                          channels,
+                          user.currentChannelId,
+                          fallbackToFirst: false,
+                        )?.name,
+                        unreadCount: directUnreadCounts[user.userId] ?? 0,
+                        avatarUri: chatAvatarUriForUser(user.userId),
+                        avatarToken: session?.token,
+                        onTap: () => openMobileDirectChat(user),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Channel? currentVoiceChannel() => channelForId(
+    channels,
+    voiceSession.currentChannelId ?? myVoiceState?.channelId,
+    fallbackToFirst: false,
+  );
+
+  Widget buildMobileVoiceStatusBar() {
+    final snapshot = voiceSession.snapshot;
+    final voiceChannel = currentVoiceChannel();
+    final connected = snapshot.connected && voiceChannel != null;
+    final canSpeak =
+        hasServerPermission('voice.speak') &&
+        !audioDeviceKindUnavailable(audioDeviceMonitor, 'audioinput') &&
+        !voiceSession.microphoneUnavailable;
+    return Material(
+      color: OsColors.sidebarBottom,
+      child: InkWell(
+        onTap: () => unawaited(showMobileVoiceSheet()),
+        child: Container(
+          height: 48,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          decoration: const BoxDecoration(
+            border: Border(top: BorderSide(color: OsColors.divider)),
+          ),
+          child: Row(
+            children: [
+              IgnorePointer(
+                child: NetworkQualityButton(
+                  latencyMs: snapshot.latencyMs,
+                  latencyJitterMs: snapshot.latencyJitterMs,
+                  upstreamPacketLoss: snapshot.upstreamPacketLoss,
+                  downstreamPacketLoss: snapshot.downstreamPacketLoss,
+                  selected: false,
+                  onPressed: () {},
+                ),
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  connected ? '已连接到 #${voiceChannel.name}' : '未加入语音频道',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: connected ? OsColors.text : OsColors.dim,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+              StatusBarIconButton(
+                tooltip: snapshot.muted ? '取消静音' : '静音',
+                icon: snapshot.muted ? Icons.mic_off : Icons.mic,
+                active: canSpeak && !snapshot.muted,
+                onPressed: canSpeak
+                    ? () => unawaited(setMuted(!snapshot.muted))
+                    : null,
+              ),
+              StatusBarIconButton(
+                tooltip: snapshot.listenOff ? '开启收听' : '关闭收听',
+                icon: snapshot.listenOff ? Icons.volume_off : Icons.volume_up,
+                active: !snapshot.listenOff,
+                onPressed: () => unawaited(setListenOff(!snapshot.listenOff)),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget mobileNavigationIcon(IconData icon, int count) {
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        Icon(icon),
+        if (count > 0)
+          Positioned(
+            right: -12,
+            top: -7,
+            child: UnreadBadge(count: count, compact: true),
+          ),
+      ],
+    );
+  }
+
+  Widget buildMobileNavigationBar() {
+    final channelUnread = channels.fold<int>(
+      0,
+      (sum, channel) =>
+          sum +
+          math.max(
+            channelUnreadCounts[channel.id] ?? 0,
+            channelMentionCounts[channel.id] ?? 0,
+          ),
+    );
+    final directUnread = directUnreadCounts.values.fold<int>(
+      0,
+      (sum, value) => sum + value,
+    );
+    return BottomNavigationBar(
+      currentIndex: mobileVoiceSheetOpen ? 2 : mobileTabIndex,
+      type: BottomNavigationBarType.fixed,
+      backgroundColor: OsColors.sidebarBottom,
+      selectedItemColor: OsColors.blurple,
+      unselectedItemColor: OsColors.dim,
+      selectedFontSize: 12,
+      unselectedFontSize: 12,
+      selectedLabelStyle: const TextStyle(fontWeight: FontWeight.w800),
+      items: [
+        BottomNavigationBarItem(
+          icon: mobileNavigationIcon(Icons.tag, channelUnread),
+          label: '频道',
+        ),
+        BottomNavigationBarItem(
+          icon: mobileNavigationIcon(Icons.forum_outlined, directUnread),
+          label: '私聊',
+        ),
+        const BottomNavigationBarItem(icon: Icon(Icons.settings), label: '设置'),
+      ],
+      onTap: (index) {
+        if (index == 2) {
+          unawaited(showMobileVoiceSheet());
+          return;
+        }
+        setState(() {
+          mobileTabIndex = index;
+          mobileChatOpen = false;
+        });
+      },
+    );
+  }
+
+  Future<void> showMobileVoiceSheet() async {
+    if (mobileVoiceSheetOpen) return;
+    setState(() => mobileVoiceSheetOpen = true);
+    var showNetworkDetails = false;
+    try {
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        useSafeArea: true,
+        backgroundColor: Colors.transparent,
+        barrierColor: const Color(0x99000000),
+        builder: (sheetContext) => DraggableScrollableSheet(
+          initialChildSize: 0.6,
+          minChildSize: 0.46,
+          maxChildSize: 0.94,
+          expand: false,
+          builder: (context, scrollController) => StatefulBuilder(
+            builder: (context, setSheetState) => AnimatedBuilder(
+              animation: voiceSession,
+              builder: (context, _) => buildMobileVoiceSheet(
+                sheetContext: sheetContext,
+                scrollController: scrollController,
+                showNetworkDetails: showNetworkDetails,
+                onShowNetworkDetails: () =>
+                    setSheetState(() => showNetworkDetails = true),
+                onHideNetworkDetails: () =>
+                    setSheetState(() => showNetworkDetails = false),
+                refresh: () => setSheetState(() {}),
+              ),
+            ),
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => mobileVoiceSheetOpen = false);
+    }
+  }
+
+  Widget buildMobileVoiceSheet({
+    required BuildContext sheetContext,
+    required ScrollController scrollController,
+    required bool showNetworkDetails,
+    required VoidCallback onShowNetworkDetails,
+    required VoidCallback onHideNetworkDetails,
+    required VoidCallback refresh,
+  }) {
+    final snapshot = voiceSession.snapshot;
+    final voiceChannel = currentVoiceChannel();
+    final voiceStatesByUserId = displayVoiceStatesByUserId();
+    final currentVoiceState = voiceStatesByUserId[session?.user.id];
+    final microphoneUnavailable =
+        audioDeviceKindUnavailable(audioDeviceMonitor, 'audioinput') ||
+        voiceSession.microphoneUnavailable;
+    final canSpeak =
+        hasServerPermission('voice.speak') && !microphoneUnavailable;
+    final canShareScreen =
+        hasServerPermission('voice.screen_share') &&
+        snapshot.connected &&
+        snapshot.voiceToken?.canShareScreen == true;
+    final quality = networkQualityForStats(
+      latencyMs: snapshot.latencyMs,
+      latencyJitterMs: snapshot.latencyJitterMs,
+      upstreamPacketLoss: snapshot.upstreamPacketLoss,
+      downstreamPacketLoss: snapshot.downstreamPacketLoss,
+    );
+    final networkLabel = switch (quality.bars) {
+      3 => '网络良好',
+      2 => '网络一般',
+      1 => '网络较差',
+      _ => '正在检测网络',
+    };
+    final voiceStatus = !snapshot.connected
+        ? '未加入语音'
+        : snapshot.muted
+        ? '已静音'
+        : currentVoiceState?.speaking == true
+        ? '正在说话'
+        : '已连接';
+
+    void refreshAfter(Future<void> action) {
+      unawaited(
+        action.whenComplete(() {
+          if (sheetContext.mounted) refresh();
+        }),
+      );
+    }
+
+    return Material(
+      color: OsColors.panel,
+      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      clipBehavior: Clip.antiAlias,
+      child: ListView(
+        controller: scrollController,
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 24),
+        children: [
+          Center(
+            child: Container(
+              width: 42,
+              height: 4,
+              decoration: BoxDecoration(
+                color: OsColors.icon,
+                borderRadius: BorderRadius.circular(999),
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          if (showNetworkDetails) ...[
+            Row(
+              children: [
+                IconButton(
+                  tooltip: '返回',
+                  onPressed: onHideNetworkDetails,
+                  icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 19),
+                ),
+                const SizedBox(width: 4),
+                const Text(
+                  '连接信息',
+                  style: TextStyle(
+                    color: OsColors.text,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 18),
+            Center(
+              child: NetworkStatsCard(
+                upstreamPacketLoss: snapshot.upstreamPacketLoss,
+                downstreamPacketLoss: snapshot.downstreamPacketLoss,
+                latencyMs: snapshot.latencyMs,
+                latencyJitterMs: snapshot.latencyJitterMs,
+              ),
+            ),
+          ] else ...[
+            Container(
+              height: 48,
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              decoration: BoxDecoration(
+                color: OsColors.panelRaised,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: OsColors.panelBorder),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.tag, color: OsColors.dim, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      voiceChannel == null ? '未加入频道' : voiceChannel.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: OsColors.text,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  NetworkQualityButton(
+                    latencyMs: snapshot.latencyMs,
+                    latencyJitterMs: snapshot.latencyJitterMs,
+                    upstreamPacketLoss: snapshot.upstreamPacketLoss,
+                    downstreamPacketLoss: snapshot.downstreamPacketLoss,
+                    selected: false,
+                    onPressed: onShowNetworkDetails,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: OsColors.panelRaised,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: OsColors.panelBorder),
+              ),
+              child: Row(
+                children: [
+                  Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      OsUserAvatar(
+                        displayName: localDisplayName,
+                        size: 48,
+                        avatarFile: localAvatarFile,
+                        avatarRevision: localAvatarRevision,
+                        avatarUri: session == null
+                            ? null
+                            : chatAvatarUriForUser(session!.user.id),
+                        avatarToken: session?.token,
+                        backgroundColor: const Color(0xFFA55CD2),
+                      ),
+                      Positioned(
+                        right: -3,
+                        bottom: -3,
+                        child: Container(
+                          width: 20,
+                          height: 20,
+                          decoration: BoxDecoration(
+                            color: snapshot.muted
+                                ? OsColors.danger
+                                : OsColors.green,
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: OsColors.panelRaised,
+                              width: 2,
+                            ),
+                          ),
+                          child: Icon(
+                            snapshot.muted ? Icons.mic_off : Icons.mic,
+                            size: 11,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(width: 13),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          localDisplayName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: OsColors.text,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        const SizedBox(height: 5),
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                voiceStatus,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: OsColors.muted,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Container(
+                              width: 8,
+                              height: 8,
+                              decoration: BoxDecoration(
+                                color: quality.color,
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                            const SizedBox(width: 5),
+                            Flexible(
+                              child: Text(
+                                networkLabel,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: OsColors.dim,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+            GridView.count(
+              crossAxisCount: 3,
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              mainAxisSpacing: 10,
+              crossAxisSpacing: 10,
+              childAspectRatio: 1.16,
+              children: [
+                MobileVoiceActionCard(
+                  label: '麦克风',
+                  icon: snapshot.muted ? Icons.mic_off : Icons.mic,
+                  active: canSpeak && !snapshot.muted,
+                  enabled: canSpeak,
+                  onTap: () => refreshAfter(setMuted(!snapshot.muted)),
+                ),
+                MobileVoiceActionCard(
+                  label: '扬声器',
+                  icon: snapshot.listenOff ? Icons.volume_off : Icons.volume_up,
+                  active: !snapshot.listenOff,
+                  onTap: () => refreshAfter(setListenOff(!snapshot.listenOff)),
+                ),
+                MobileVoiceActionCard(
+                  label: '降噪',
+                  active: noiseSuppressionEnabled,
+                  iconWidget: Opacity(
+                    opacity: noiseSuppressionEnabled ? 1 : 0.4,
+                    child: Image.asset(
+                      'assets/images/noise_suppression.png',
+                      width: 46,
+                      height: 28,
+                      fit: BoxFit.contain,
+                    ),
+                  ),
+                  onTap: () => refreshAfter(toggleNoiseSuppression()),
+                ),
+                MobileVoiceActionCard(
+                  label: '屏幕共享',
+                  icon: voiceSession.isScreenSharing
+                      ? Icons.stop_screen_share_rounded
+                      : Icons.screen_share_rounded,
+                  active: voiceSession.isScreenSharing,
+                  enabled:
+                      !screenShareActionInFlight &&
+                      (voiceSession.isScreenSharing || canShareScreen),
+                  onTap: () => refreshAfter(toggleScreenShare()),
+                ),
+                MobileVoiceActionCard(
+                  label: '设置',
+                  icon: Icons.settings,
+                  onTap: () => unawaited(showClientSettings()),
+                ),
+                MobileVoiceActionCard(
+                  label: '连接信息',
+                  icon: Icons.signal_cellular_alt,
+                  onTap: onShowNetworkDetails,
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
     );
   }
 
@@ -9148,29 +9887,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   }
 
   Widget buildChannelPane() {
-    final liveKitParticipantUserIds =
-        voiceSession.snapshot.liveKitParticipantUserIds;
-    final liveKitSpeakingUserIds = voiceSession.snapshot.liveKitSpeakingUserIds;
-    final voiceStatesByUserId = {
-      for (final state in presence.voiceStates)
-        state.userId: VoiceState(
-          serverId: state.serverId,
-          userId: state.userId,
-          displayName: state.displayName,
-          channelId: state.channelId,
-          muted: state.muted,
-          deafened: state.deafened,
-          speaking: channelMemberIsSpeaking(
-            state.userId,
-            liveKitParticipantUserIds,
-            liveKitSpeakingUserIds,
-          ),
-          screenSharing: state.screenSharing,
-          screenShareResolution: state.screenShareResolution,
-          screenShareFPS: state.screenShareFPS,
-          screenShareMediaNodeId: state.screenShareMediaNodeId,
-        ),
-    };
+    final voiceStatesByUserId = displayVoiceStatesByUserId();
     final microphoneUnavailable =
         audioDeviceKindUnavailable(audioDeviceMonitor, 'audioinput') ||
         voiceSession.microphoneUnavailable;
@@ -9312,7 +10029,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     );
   }
 
-  Widget buildMainPane() {
+  Widget buildMainPane({VoidCallback? onBack}) {
     final channel = selectedChannel;
     final directPeer = selectedDirectUser();
     final directPeerName = directPeer == null
@@ -9373,6 +10090,18 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
             ),
             child: Row(
               children: [
+                if (onBack != null) ...[
+                  IconButton(
+                    tooltip: '返回',
+                    onPressed: onBack,
+                    icon: const Icon(
+                      Icons.arrow_back_ios_new_rounded,
+                      color: OsColors.muted,
+                      size: 20,
+                    ),
+                  ),
+                  const SizedBox(width: 2),
+                ],
                 if (chatScope == ChatScope.direct && directPeer != null)
                   ChannelMemberSpeakingAvatar(
                     displayName: directPeerName,
@@ -10692,25 +11421,51 @@ class OsSplitSettingsBody extends StatelessWidget {
   Widget build(BuildContext context) {
     return SizedBox(
       height: 370,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Container(
-            width: 205,
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: const Color(0xFF222429),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: OsColors.panelBorder),
-            ),
-            child: SmoothListView(
-              padding: EdgeInsets.zero,
-              children: navigation,
-            ),
-          ),
-          const SizedBox(width: 14),
-          Expanded(child: content),
-        ],
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          if (constraints.maxWidth < 560) {
+            return Column(
+              children: [
+                Container(
+                  height: 58,
+                  padding: const EdgeInsets.all(7),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF222429),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: OsColors.panelBorder),
+                  ),
+                  child: Row(
+                    children: [
+                      for (final entry in navigation) Expanded(child: entry),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Expanded(child: content),
+              ],
+            );
+          }
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                width: 205,
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF222429),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: OsColors.panelBorder),
+                ),
+                child: SmoothListView(
+                  padding: EdgeInsets.zero,
+                  children: navigation,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(child: content),
+            ],
+          );
+        },
       ),
     );
   }
@@ -17984,6 +18739,318 @@ class _AudioDeviceMenuOptionState extends State<AudioDeviceMenuOption> {
 }
 
 enum AudioVolumePopoverKind { input, output }
+
+class MobileChannelCard extends StatelessWidget {
+  const MobileChannelCard({
+    super.key,
+    required this.channel,
+    required this.selected,
+    required this.unreadCount,
+    required this.mentionCount,
+    required this.members,
+    required this.voiceStatesByUserId,
+    required this.api,
+    required this.avatarToken,
+    required this.onTap,
+    required this.onDoubleTap,
+    this.onLongPressStart,
+  });
+
+  final Channel channel;
+  final bool selected;
+  final int unreadCount;
+  final int mentionCount;
+  final List<PresenceUser> members;
+  final Map<String, VoiceState> voiceStatesByUserId;
+  final OpenSpeakApi? api;
+  final String? avatarToken;
+  final VoidCallback onTap;
+  final VoidCallback onDoubleTap;
+  final GestureLongPressStartCallback? onLongPressStart;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasUnread = unreadCount > 0 || mentionCount > 0;
+    final visibleMembers = members.take(2).toList();
+    final memberNames = visibleMembers
+        .map(
+          (member) => member.displayName.trim().isEmpty
+              ? member.userId
+              : member.displayName.trim(),
+        )
+        .join('、');
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 9),
+      child: GestureDetector(
+        onLongPressStart: onLongPressStart,
+        child: Material(
+          color: selected ? OsColors.rowSelected : OsColors.rowHover,
+          borderRadius: BorderRadius.circular(14),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: onTap,
+            onDoubleTap: onDoubleTap,
+            child: Container(
+              constraints: const BoxConstraints(minHeight: 58),
+              padding: const EdgeInsets.fromLTRB(14, 10, 10, 10),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: selected ? OsColors.blurple : OsColors.panelBorder,
+                  width: selected ? 2 : 1,
+                ),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.tag,
+                        color: selected || hasUnread
+                            ? OsColors.text
+                            : OsColors.dim,
+                        size: 21,
+                      ),
+                      const SizedBox(width: 11),
+                      Expanded(
+                        child: Text(
+                          channel.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: selected || hasUnread
+                                ? OsColors.text
+                                : OsColors.muted,
+                            fontSize: 15,
+                            fontWeight: selected || hasUnread
+                                ? FontWeight.w800
+                                : FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      UnreadBadge(
+                        count: unreadCount > 0 ? unreadCount : mentionCount,
+                        compact: true,
+                      ),
+                      const SizedBox(width: 6),
+                      const Icon(
+                        Icons.chevron_right_rounded,
+                        color: OsColors.dim,
+                        size: 24,
+                      ),
+                    ],
+                  ),
+                  if (visibleMembers.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        const SizedBox(width: 30),
+                        for (final member in visibleMembers)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 3),
+                            child: ChannelMemberSpeakingAvatar(
+                              displayName: member.displayName.trim().isEmpty
+                                  ? member.userId
+                                  : member.displayName.trim(),
+                              online: member.online,
+                              voiceState: voiceStatesByUserId[member.userId],
+                              avatarUri: member.avatarVersion > 0
+                                  ? api?.userAvatarUri(
+                                      member.userId,
+                                      member.avatarVersion,
+                                      small: true,
+                                    )
+                                  : null,
+                              avatarToken: avatarToken,
+                            ),
+                          ),
+                        const SizedBox(width: 5),
+                        Expanded(
+                          child: Text(
+                            members.length > visibleMembers.length
+                                ? '$memberNames 等 ${members.length} 人在线'
+                                : '$memberNames 在线',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: OsColors.dim,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class MobileDirectUserTile extends StatelessWidget {
+  const MobileDirectUserTile({
+    super.key,
+    required this.user,
+    required this.voiceState,
+    required this.channelName,
+    required this.unreadCount,
+    required this.avatarUri,
+    required this.avatarToken,
+    required this.onTap,
+  });
+
+  final PresenceUser user;
+  final VoiceState? voiceState;
+  final String? channelName;
+  final int unreadCount;
+  final Uri? avatarUri;
+  final String? avatarToken;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final displayName = user.displayName.trim().isEmpty
+        ? user.userId
+        : user.displayName.trim();
+    return Material(
+      color: OsColors.rowHover,
+      borderRadius: BorderRadius.circular(14),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 68),
+          padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: OsColors.panelBorder),
+          ),
+          child: Row(
+            children: [
+              ChannelMemberSpeakingAvatar(
+                displayName: displayName,
+                online: user.online,
+                voiceState: voiceState,
+                avatarUri: avatarUri,
+                avatarToken: avatarToken,
+              ),
+              const SizedBox(width: 11),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      displayName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: OsColors.text,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      channelName == null ? '在线' : '在 #$channelName',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: OsColors.dim,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              UnreadBadge(count: unreadCount, compact: true),
+              const SizedBox(width: 7),
+              const Icon(
+                Icons.chevron_right_rounded,
+                color: OsColors.dim,
+                size: 24,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class MobileVoiceActionCard extends StatelessWidget {
+  const MobileVoiceActionCard({
+    super.key,
+    required this.label,
+    this.icon,
+    this.iconWidget,
+    required this.onTap,
+    this.active = false,
+    this.enabled = true,
+  }) : assert(icon != null || iconWidget != null);
+
+  final String label;
+  final IconData? icon;
+  final Widget? iconWidget;
+  final VoidCallback onTap;
+  final bool active;
+  final bool enabled;
+
+  @override
+  Widget build(BuildContext context) {
+    final foreground = !enabled
+        ? OsColors.icon
+        : active
+        ? const Color(0xFF929CFF)
+        : OsColors.muted;
+    return Semantics(
+      button: true,
+      enabled: enabled,
+      label: label,
+      child: Material(
+        color: active ? OsColors.blurpleSoft : OsColors.panelRaised,
+        borderRadius: BorderRadius.circular(15),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: enabled ? onTap : null,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(15),
+              border: Border.all(
+                color: active ? OsColors.blurple : OsColors.panelBorder,
+              ),
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                iconWidget ?? Icon(icon, color: foreground, size: 25),
+                const SizedBox(height: 7),
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: foreground,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 class CurrentUserBar extends StatefulWidget {
   const CurrentUserBar({
