@@ -43,9 +43,6 @@ async function streamAudio(event, url, audioPath) {
     });
   }
 
-  const client = await self.clients.get(event.clientId);
-  if (!client) return new Response('audio client is unavailable', {status: 503});
-
   const headers = {
     'Accept-Ranges': 'bytes',
     'Cache-Control': 'no-store',
@@ -58,6 +55,9 @@ async function streamAudio(event, url, audioPath) {
   if (event.request.method === 'HEAD') {
     return new Response(null, {status: range.partial ? 206 : 200, headers});
   }
+
+  const client = await self.clients.get(event.clientId);
+  if (!client) return new Response('audio client is unavailable', {status: 503});
 
   let offset = range.start;
   const body = new ReadableStream({

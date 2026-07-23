@@ -40,3 +40,23 @@ listeners.fetch({
   respondWith() { intercepted = true; },
 });
 assert.equal(intercepted, false);
+
+async function testHeadWithoutClient() {
+  const url = new URL(
+    'https://example.test/chat/__openspeak_audio__/source/song.mp3?size=100&type=audio%2Fmpeg',
+  );
+  const response = await context.streamAudio({
+    request: new Request(url, {
+      method: 'HEAD',
+      headers: {Range: 'bytes=10-24'},
+    }),
+    clientId: '',
+  }, url, '/chat/__openspeak_audio__/');
+  assert.equal(response.status, 206);
+  assert.equal(response.headers.get('Content-Range'), 'bytes 10-24/100');
+}
+
+testHeadWithoutClient().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
