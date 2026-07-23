@@ -4542,7 +4542,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                   uploadFile,
                   encryptionMode: mode,
                   originalName: fileNameFor(file),
-                  contentType: contentTypeForPath(file.path),
+                  contentType: contentTypeForPath(fileNameFor(file)),
                   epochId: epochId,
                   nonce: nonce,
                   plaintextSizeBytes: mode == 'e2ee' ? fileLength : 0,
@@ -4557,7 +4557,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                   uploadFile,
                   encryptionMode: mode,
                   originalName: fileNameFor(file),
-                  contentType: contentTypeForPath(file.path),
+                  contentType: contentTypeForPath(fileNameFor(file)),
                   epochId: epochId,
                   nonce: nonce,
                   plaintextSizeBytes: mode == 'e2ee' ? fileLength : 0,
@@ -4704,7 +4704,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         task.targetId,
         uploadFile,
         originalName: fileNameFor(file),
-        contentType: contentTypeForPath(file.path),
+        contentType: contentTypeForPath(fileNameFor(file)),
         encryptionMode: mode,
         messageId: messageId,
         senderDeviceId: senderDeviceId,
@@ -5138,9 +5138,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         downloadBrowserBytes(
           bytes,
           attachment.displayName,
-          attachment.contentType.isEmpty
-              ? contentTypeForPath(attachment.displayName)
-              : attachment.contentType,
+          attachmentContentType(attachment.contentType, attachment.displayName),
         );
       });
       return;
@@ -5509,10 +5507,17 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       if (auth == null || client == null) {
         throw OpenSpeakException('未连接服务器');
       }
+      final contentType = attachmentContentType(
+        attachment.contentType,
+        attachment.displayName,
+      );
       final streamUri = await loadAfterBrowserAudioUnlock<Uri?>(
         unlock: browserAudioPlayer.unlock,
         load: () {
-          if (attachment.encrypted) return Future.value();
+          if (attachment.encrypted ||
+              contentType != attachment.contentType.trim()) {
+            return Future.value();
+          }
           return attachment.direct
               ? client.directFileStreamUri(auth.token, attachment.fileId)
               : client.storedFileStreamUri(auth.token, attachment.fileId);
@@ -5524,9 +5529,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         revokeBrowserObjectUrl(previousObjectUrl);
       }
       activeAudioObjectUrl = null;
-      final contentType = attachment.contentType.isEmpty
-          ? contentTypeForPath(attachment.displayName)
-          : attachment.contentType;
       if (streamUri != null) {
         await browserAudioPlayer.playUrl(streamUri.toString());
       } else if (browserAudioPlayer.supportsStreaming) {
@@ -5627,9 +5629,10 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     try {
       await audioPlayer.setSourceUrl(
         source.uri.toString(),
-        mimeType: attachment.contentType.isEmpty
-            ? contentTypeForPath(attachment.displayName)
-            : attachment.contentType,
+        mimeType: attachmentContentType(
+          attachment.contentType,
+          attachment.displayName,
+        ),
       );
     } catch (e) {
       audioStreamProxy.cancel(source.id);
@@ -13954,9 +13957,10 @@ class AudioStreamProxy {
         statusCode = response.statusCode;
         return;
       }
-      final contentType = entry.attachment.contentType.isEmpty
-          ? contentTypeForPath(entry.attachment.displayName)
-          : entry.attachment.contentType;
+      final contentType = attachmentContentType(
+        entry.attachment.contentType,
+        entry.attachment.displayName,
+      );
       response.headers.set(HttpHeaders.acceptRangesHeader, 'bytes');
       response.headers.set(HttpHeaders.contentTypeHeader, contentType);
       response.headers.set(HttpHeaders.cacheControlHeader, 'no-store');
@@ -14053,7 +14057,7 @@ Future<int> streamProxyBytes(
   final startedAt = DateTime.now();
   while (offset <= end) {
     if (entry.cancelled) break;
-    final chunkEnd = (offset + audioProxyFetchChunkBytes - 1).clamp(
+    final chunkEnd = (offset + audioProxyFetchSize(start, offset) - 1).clamp(
       offset,
       end,
     );
@@ -14122,6 +14126,11 @@ bool shouldReloadAudioSource({
 const audioProxyFetchChunkBytes = 128 * 1024;
 const audioProxyInitialBurstBytes = 768 * 1024;
 const audioProxyMaxBytesPerSecond = 512 * 1024;
+
+int audioProxyFetchSize(int streamStart, int offset) =>
+    streamStart == 0 && offset == 0
+    ? audioProxyInitialBurstBytes
+    : audioProxyFetchChunkBytes;
 
 Future<void> throttleAudioProxyStream(int sent, DateTime startedAt) async {
   final throttledBytes = sent - audioProxyInitialBurstBytes;
@@ -16230,6 +16239,15 @@ bool isAudioContent(String contentType, String name) {
       lower.endsWith('.ogg') ||
       lower.endsWith('.opus') ||
       lower.endsWith('.wma');
+}
+
+String attachmentContentType(String contentType, String name) {
+  final normalized = contentType.trim();
+  return normalized.isEmpty ||
+          normalized.toLowerCase().split(';').first.trim() ==
+              'application/octet-stream'
+      ? contentTypeForPath(name)
+      : normalized;
 }
 
 String normalizedExtensionName(String name) {

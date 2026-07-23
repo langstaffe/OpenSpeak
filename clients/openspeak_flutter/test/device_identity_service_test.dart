@@ -224,6 +224,46 @@ void main() {
       ),
       clear.sublist(start, end + 1),
     );
+    final streamService = DeviceIdentityService();
+    final rangeRequests = <List<int>>[];
+    Future<Uint8List> trackedReadRange(int start, int endInclusive) async {
+      rangeRequests.add([start, endInclusive]);
+      return readRange(start, endInclusive);
+    }
+
+    expect(
+      await streamService.decryptAttachmentRange(
+        readCipherRange: trackedReadRange,
+        channelKey: key,
+        channelId: 'chn_test',
+        epochId: 'epc_test',
+        nonce: encrypted.nonce,
+        plaintextSize: clear.length,
+        start: 0,
+        endInclusive: 31,
+      ),
+      clear.sublist(0, 32),
+    );
+    expect(rangeRequests, hasLength(1));
+    rangeRequests.clear();
+    expect(
+      await streamService.decryptAttachmentRange(
+        readCipherRange: trackedReadRange,
+        channelKey: key,
+        channelId: 'chn_test',
+        epochId: 'epc_test',
+        nonce: encrypted.nonce,
+        plaintextSize: clear.length,
+        start: attachmentEncryptionChunkSize,
+        endInclusive: attachmentEncryptionChunkSize + 31,
+      ),
+      clear.sublist(
+        attachmentEncryptionChunkSize,
+        attachmentEncryptionChunkSize + 32,
+      ),
+    );
+    expect(rangeRequests, hasLength(1));
+    expect(rangeRequests.single.first, greaterThanOrEqualTo(28));
     await expectLater(
       service.decryptAttachmentRange(
         readCipherRange: readRange,

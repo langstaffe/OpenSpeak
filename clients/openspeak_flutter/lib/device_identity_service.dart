@@ -92,6 +92,10 @@ class DeviceIdentityService {
   final X25519 _envelopeAlgorithm = X25519();
   final Hkdf _envelopeKdf = Hkdf(hmac: Hmac.sha256(), outputLength: 32);
   final AesGcm _cipher = AesGcm.with256bits();
+  // ponytail: one entry matches the single active audio stream; use an LRU
+  // only if concurrent attachment streaming is added.
+  String _attachmentRangeHeaderKey = '';
+  _AttachmentHeader? _attachmentRangeHeader;
 
   String _key(String serverId, String userId) =>
       'openspeak.e2ee.device.$serverId.$userId';
@@ -534,29 +538,59 @@ class DeviceIdentityService {
     if (start < 0 || endInclusive < start || start >= plaintextSize) {
       throw RangeError('invalid attachment range');
     }
-    // ponytail: revalidate the 28-byte header per range; cache it only if
-    // remote audio profiling shows the extra tiny request matters.
-    final header = _parseAttachmentHeader(
-      await readCipherRange(0, attachmentEncryptionHeaderSize - 1),
-      nonce: nonce,
-      plaintextSize: plaintextSize,
-    );
     final end = min(endInclusive, plaintextSize - 1);
-    final firstChunk = start ~/ header.chunkSize;
-    final lastChunk = end ~/ header.chunkSize;
+    final firstChunk = start ~/ attachmentEncryptionChunkSize;
+    final lastChunk = end ~/ attachmentEncryptionChunkSize;
     final firstCipherOffset =
-        attachmentEncryptionHeaderSize + firstChunk * (header.chunkSize + 16);
+        attachmentEncryptionHeaderSize +
+        firstChunk * (attachmentEncryptionChunkSize + 16);
     final lastClearLength = min(
-      header.chunkSize,
-      header.plaintextSize - lastChunk * header.chunkSize,
+      attachmentEncryptionChunkSize,
+      plaintextSize - lastChunk * attachmentEncryptionChunkSize,
     );
-    final encryptedSpan = await readCipherRange(
-      firstCipherOffset,
-      attachmentEncryptionHeaderSize +
-          lastChunk * (header.chunkSize + 16) +
-          lastClearLength +
-          15,
-    );
+    final lastCipherOffset =
+        attachmentEncryptionHeaderSize +
+        lastChunk * (attachmentEncryptionChunkSize + 16) +
+        lastClearLength +
+        15;
+    final cacheKey = '$nonce:$plaintextSize';
+    final cachedHeader = _attachmentRangeHeaderKey == cacheKey
+        ? _attachmentRangeHeader
+        : null;
+    late final _AttachmentHeader header;
+    late final Uint8List encryptedSpan;
+    if (cachedHeader != null) {
+      header = cachedHeader;
+      encryptedSpan = await readCipherRange(
+        firstCipherOffset,
+        lastCipherOffset,
+      );
+    } else if (firstChunk == 0) {
+      final combined = await readCipherRange(0, lastCipherOffset);
+      header = _parseAttachmentHeader(
+        combined.sublist(
+          0,
+          min(attachmentEncryptionHeaderSize, combined.length),
+        ),
+        nonce: nonce,
+        plaintextSize: plaintextSize,
+      );
+      encryptedSpan = combined.sublist(attachmentEncryptionHeaderSize);
+    } else {
+      header = _parseAttachmentHeader(
+        await readCipherRange(0, attachmentEncryptionHeaderSize - 1),
+        nonce: nonce,
+        plaintextSize: plaintextSize,
+      );
+      encryptedSpan = await readCipherRange(
+        firstCipherOffset,
+        lastCipherOffset,
+      );
+    }
+    if (cachedHeader == null) {
+      _attachmentRangeHeaderKey = cacheKey;
+      _attachmentRangeHeader = header;
+    }
     final clear = BytesBuilder(copy: false);
     var encryptedOffset = 0;
     for (var index = firstChunk; index <= lastChunk; index += 1) {

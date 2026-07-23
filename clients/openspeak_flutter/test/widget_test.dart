@@ -4657,6 +4657,18 @@ void main() {
     );
     expect(isAudioContent('application/octet-stream', 'song.FLAC '), isTrue);
     expect(contentTypeForPath(r'F:\Music\track.MP3 '), 'audio/mpeg');
+    expect(
+      attachmentContentType('application/octet-stream', 'song.FLAC '),
+      'audio/flac',
+    );
+    expect(
+      attachmentContentType(
+        'Application/Octet-Stream ; charset=binary',
+        'song.mp3',
+      ),
+      'audio/mpeg',
+    );
+    expect(attachmentContentType('audio/custom', 'song.mp3'), 'audio/custom');
     expect(isAudioContent('application/pdf', '音乐 文件.pdf'), isFalse);
   });
 
@@ -4675,6 +4687,15 @@ void main() {
     final longRange = parseProxyRange('bytes=0-8284880', 8284881);
     expect(longRange?.start, 0);
     expect(longRange?.end, 8284880);
+    expect(audioProxyFetchSize(0, 0), audioProxyInitialBurstBytes);
+    expect(
+      audioProxyFetchSize(0, audioProxyFetchChunkBytes),
+      audioProxyFetchChunkBytes,
+    );
+    expect(
+      audioProxyFetchSize(audioProxyFetchChunkBytes, audioProxyFetchChunkBytes),
+      audioProxyFetchChunkBytes,
+    );
   });
 
   test('stopped audio proxy reloads a newly cached source before resuming', () {
