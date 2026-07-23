@@ -135,12 +135,16 @@ lk.VideoPublishOptions screenShareVideoPublishOptions(
   TargetPlatform platform, {
   bool isWeb = kIsWeb,
 }) {
-  if (!isWeb && platform == TargetPlatform.macOS) {
+  if (!isWeb &&
+      (platform == TargetPlatform.macOS ||
+          platform == TargetPlatform.windows)) {
     return lk.VideoPublishOptions(
       videoCodec: 'h264',
       screenShareEncoding: encoding,
       simulcast: false,
-      degradationPreference: lk.DegradationPreference.maintainFramerate,
+      degradationPreference: platform == TargetPlatform.macOS
+          ? lk.DegradationPreference.maintainFramerate
+          : null,
       backupVideoCodec: const lk.BackupVideoCodec(enabled: false),
     );
   }
@@ -1077,7 +1081,11 @@ class VoiceSessionController extends ChangeNotifier {
       if (publishOptions.videoCodec == 'h264' &&
           track.codec?.toLowerCase() != 'h264') {
         await participant.removePublishedTrack(publication.sid);
-        throw OpenSpeakException('macOS 屏幕共享只允许使用硬件 H.264');
+        throw OpenSpeakException(
+          defaultTargetPlatform == TargetPlatform.macOS
+              ? 'macOS 屏幕共享只允许使用硬件 H.264'
+              : 'Windows 屏幕共享只允许使用 H.264',
+        );
       }
       if (!voiceTrackEncryptionAccepted(
         e2eeRequired: snapshot.voiceToken?.e2eeRequired == true,

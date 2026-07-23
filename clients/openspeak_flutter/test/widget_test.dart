@@ -3624,7 +3624,7 @@ void main() {
     expect(partial.bitrateMbps('1080p', 60), 16);
   });
 
-  test('macOS screen sharing requires H264 without a VP8 fallback', () {
+  test('native desktop screen sharing requires only H264', () {
     final encoding = screenShareVideoParameters(
       const ScreenShareQuality('1080p', 60),
     ).encoding;
@@ -3651,7 +3651,8 @@ void main() {
       lk.DegradationPreference.maintainFramerate,
     );
     expect(macOS.screenShareEncoding, same(encoding));
-    expect(windows.videoCodec, 'vp8');
+    expect(windows.videoCodec, 'h264');
+    expect(windows.backupVideoCodec.enabled, isFalse);
     expect(windows.degradationPreference, isNull);
     expect(web.videoCodec, 'vp8');
     expect(web.degradationPreference, isNull);
