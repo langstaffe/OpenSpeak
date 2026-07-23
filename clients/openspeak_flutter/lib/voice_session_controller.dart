@@ -315,17 +315,18 @@ class _OpenSpeakAudioCaptureOptions extends lk.AudioCaptureOptions {
   }) : super(
          echoCancellation: true,
          autoGainControl: true,
-         noiseSuppression: noiseSuppressionEnabled,
-         highPassFilter: noiseSuppressionEnabled,
-         typingNoiseDetection: noiseSuppressionEnabled,
-         voiceIsolation: noiseSuppressionEnabled,
+         noiseSuppression: kIsWeb || noiseSuppressionEnabled,
+         highPassFilter: kIsWeb || noiseSuppressionEnabled,
+         typingNoiseDetection: kIsWeb || noiseSuppressionEnabled,
+         voiceIsolation: kIsWeb || noiseSuppressionEnabled,
          stopAudioCaptureOnMute: false,
        );
 
   @override
   Map<String, dynamic> toMediaConstraintsMap() {
     final constraints = super.toMediaConstraintsMap();
-    if (kIsWeb && deviceId?.isNotEmpty == true) {
+    if (kIsWeb) {
+      constraints.remove('optional');
       constraints.addAll({
         'echoCancellation': echoCancellation,
         'autoGainControl': autoGainControl,
@@ -3594,6 +3595,21 @@ class VoiceSessionController extends ChangeNotifier {
       await _releaseMicrophonePreview?.call();
       ClientLog.write('voice.mic', 'capture create start');
       track = await lk.LocalAudioTrack.create(_audioCaptureOptions);
+      if (kIsWeb) {
+        try {
+          final settings = track.mediaStreamTrack.getSettings();
+          ClientLog.write(
+            'voice.mic',
+            'capture settings '
+                'echoCancellation=${settings['echoCancellation'] ?? 'unsupported'} '
+                'noiseSuppression=${settings['noiseSuppression'] ?? 'unsupported'} '
+                'autoGainControl=${settings['autoGainControl'] ?? 'unsupported'} '
+                'voiceIsolation=${settings['voiceIsolation'] ?? 'unsupported'}',
+          );
+        } catch (error, stackTrace) {
+          ClientLog.error('voice.mic.settings', error, stackTrace);
+        }
+      }
       ClientLog.write('voice.mic', 'capture create done');
       // Device hotplug is handled by AudioDeviceMonitor. Keep the publication
       // stable instead of letting LiveKit unpublish and renegotiate on track end.

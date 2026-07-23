@@ -6,6 +6,7 @@ import 'dart:ui' show PointerDeviceKind;
 
 import 'package:flutter/gestures.dart' show kSecondaryMouseButton;
 import 'package:file_selector/file_selector.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_test/flutter_test.dart';
@@ -3504,6 +3505,13 @@ void main() {
       ),
     );
 
+    if (kIsWeb) {
+      expect(
+        find.byKey(const ValueKey('noise-suppression-toggle')),
+        findsNothing,
+      );
+      return;
+    }
     final icon = tester.widget<Image>(
       find.byKey(const ValueKey('noise-suppression-icon')),
     );
@@ -3553,9 +3561,6 @@ void main() {
     final barRect = tester.getRect(find.byType(CurrentUserBar));
     final signalRect = tester.getRect(find.byType(NetworkQualityButton));
     final shareRect = tester.getRect(find.byIcon(Icons.screen_share));
-    final noiseRect = tester.getRect(
-      find.byKey(const ValueKey('noise-suppression-toggle')),
-    );
     final micRect = tester.getRect(find.byIcon(Icons.mic));
     final micButtonRect = tester.getRect(find.byTooltip('静音'));
     final speakerRect = tester.getRect(find.byIcon(Icons.volume_up));
@@ -3564,12 +3569,22 @@ void main() {
     final signalVisualLeft = signalRect.center.dx - 10;
     expect(signalVisualLeft - barRect.left, barRect.right - speakerRect.right);
     expect(shareRect.center.dx - signalRect.center.dx, 28);
-    expect(noiseRect.size, const Size(56, 28));
-    expect(noiseRect.right, micButtonRect.left);
+    if (kIsWeb) {
+      expect(
+        find.byKey(const ValueKey('noise-suppression-toggle')),
+        findsNothing,
+      );
+    } else {
+      final noiseRect = tester.getRect(
+        find.byKey(const ValueKey('noise-suppression-toggle')),
+      );
+      expect(noiseRect.size, const Size(56, 28));
+      expect(noiseRect.right, micButtonRect.left);
+      expect(signalRect.center.dy, noiseRect.center.dy);
+    }
     expect(speakerRect.center.dx - micRect.center.dx, 28);
     expect(signalRect.center.dy, shareRect.center.dy);
     expect(signalRect.center.dy, micRect.center.dy);
-    expect(signalRect.center.dy, noiseRect.center.dy);
     expect(signalRect.center.dy, speakerRect.center.dy);
     expect(shareIcon.color, Colors.white);
   });

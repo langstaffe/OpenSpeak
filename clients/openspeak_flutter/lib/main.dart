@@ -9195,22 +9195,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
               ),
             ),
           ),
-          Tooltip(
-            message: '服务器菜单',
-            child: Material(
-              color: serverMenuOpen ? OsColors.rowSelected : Colors.transparent,
-              borderRadius: BorderRadius.circular(8),
-              child: InkWell(
-                onTapUp: (details) => unawaited(toggleServerMenu(details)),
-                borderRadius: BorderRadius.circular(8),
-                child: const SizedBox(
-                  width: 42,
-                  height: 42,
-                  child: Icon(Icons.menu, color: OsColors.text, size: 23),
-                ),
-              ),
-            ),
-          ),
         ],
       ),
     );
@@ -9247,7 +9231,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
           ),
           Expanded(
             child: channels.isEmpty
-                ? const ChatEmptyState(title: '还没有频道', subtitle: '请从服务器菜单创建频道')
+                ? const ChatEmptyState(title: '还没有频道', subtitle: '当前没有可用频道')
                 : ListView.builder(
                     padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
                     itemCount: channels.length,
@@ -9786,20 +9770,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                   icon: snapshot.listenOff ? Icons.volume_off : Icons.volume_up,
                   active: !snapshot.listenOff,
                   onTap: () => refreshAfter(setListenOff(!snapshot.listenOff)),
-                ),
-                MobileVoiceActionCard(
-                  label: '降噪',
-                  active: noiseSuppressionEnabled,
-                  iconWidget: Opacity(
-                    opacity: noiseSuppressionEnabled ? 1 : 0.4,
-                    child: Image.asset(
-                      'assets/images/noise_suppression.png',
-                      width: 46,
-                      height: 28,
-                      fit: BoxFit.contain,
-                    ),
-                  ),
-                  onTap: () => refreshAfter(toggleNoiseSuppression()),
                 ),
                 MobileVoiceActionCard(
                   label: '屏幕共享',
@@ -18406,23 +18376,24 @@ class ServerHeader extends StatelessWidget {
               ),
             ),
           ),
-          Tooltip(
-            message: '服务器菜单',
-            child: Material(
-              color: menuOpen ? OsColors.rowSelected : Colors.transparent,
-              borderRadius: BorderRadius.circular(6),
-              child: InkWell(
-                onTapUp: onMenuPressed,
-                mouseCursor: SystemMouseCursors.click,
+          if (!kIsWeb)
+            Tooltip(
+              message: '服务器菜单',
+              child: Material(
+                color: menuOpen ? OsColors.rowSelected : Colors.transparent,
                 borderRadius: BorderRadius.circular(6),
-                child: SizedBox(
-                  width: 36,
-                  height: 36,
-                  child: Icon(Icons.menu, color: OsColors.text, size: 22),
+                child: InkWell(
+                  onTapUp: onMenuPressed,
+                  mouseCursor: SystemMouseCursors.click,
+                  borderRadius: BorderRadius.circular(6),
+                  child: SizedBox(
+                    width: 36,
+                    height: 36,
+                    child: Icon(Icons.menu, color: OsColors.text, size: 22),
+                  ),
                 ),
               ),
             ),
-          ),
         ],
       ),
     );
@@ -19318,7 +19289,7 @@ class _CurrentUserBarState extends State<CurrentUserBar> {
     const statusIconSlot = 28.0;
     const networkIconSize = 20.0;
     const audioIconSize = 18.0;
-    const audioIconGroupWidth = statusIconSlot * 4;
+    const audioIconGroupWidth = statusIconSlot * (kIsWeb ? 2 : 4);
     const settingsIconLeft = 201.0;
     const speakerVisualRight =
         settingsIconLeft + (statusIconSlot + audioIconSize) / 2;
@@ -19401,22 +19372,23 @@ class _CurrentUserBarState extends State<CurrentUserBar> {
               top: statusIconTop,
               child: Row(
                 children: [
-                  StatusBarIconButton(
-                    key: const ValueKey('noise-suppression-toggle'),
-                    tooltip: widget.noiseSuppressionEnabled ? '关闭降噪' : '开启降噪',
-                    iconWidget: Opacity(
-                      opacity: widget.noiseSuppressionEnabled ? 1 : 0.4,
-                      child: Image.asset(
-                        'assets/images/noise_suppression.png',
-                        key: const ValueKey('noise-suppression-icon'),
-                        width: 52,
-                        height: 26,
-                        fit: BoxFit.contain,
+                  if (!kIsWeb)
+                    StatusBarIconButton(
+                      key: const ValueKey('noise-suppression-toggle'),
+                      tooltip: widget.noiseSuppressionEnabled ? '关闭降噪' : '开启降噪',
+                      iconWidget: Opacity(
+                        opacity: widget.noiseSuppressionEnabled ? 1 : 0.4,
+                        child: Image.asset(
+                          'assets/images/noise_suppression.png',
+                          key: const ValueKey('noise-suppression-icon'),
+                          width: 52,
+                          height: 26,
+                          fit: BoxFit.contain,
+                        ),
                       ),
+                      width: 56,
+                      onPressed: widget.onNoiseSuppressionToggle,
                     ),
-                    width: 56,
-                    onPressed: widget.onNoiseSuppressionToggle,
-                  ),
                   _volumeIconButton(
                     kind: AudioVolumePopoverKind.input,
                     link: _inputVolumeLink,

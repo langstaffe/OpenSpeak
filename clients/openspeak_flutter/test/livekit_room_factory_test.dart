@@ -39,7 +39,7 @@ void main() {
     await room.dispose();
   });
 
-  test('selected Web microphone keeps audio processing constraints', () {
+  test('Web microphone always keeps audio processing constraints', () {
     final enabled = voiceAudioCaptureOptions(
       noiseSuppressionEnabled: true,
       deviceId: 'microphone-1',
@@ -48,19 +48,29 @@ void main() {
       noiseSuppressionEnabled: false,
       deviceId: 'microphone-1',
     ).toMediaConstraintsMap();
+    final systemDefault = voiceAudioCaptureOptions(
+      noiseSuppressionEnabled: false,
+    ).toMediaConstraintsMap();
 
     if (kIsWeb) {
       expect(enabled['deviceId'], isNotNull);
+      expect(enabled['optional'], isNull);
       expect(enabled['echoCancellation'], isTrue);
       expect(enabled['autoGainControl'], isTrue);
       expect(enabled['noiseSuppression'], isTrue);
       expect(enabled['voiceIsolation'], isTrue);
       expect(disabled['echoCancellation'], isTrue);
       expect(disabled['autoGainControl'], isTrue);
-      expect(disabled['noiseSuppression'], isFalse);
-      expect(disabled['voiceIsolation'], isFalse);
+      expect(disabled['noiseSuppression'], isTrue);
+      expect(disabled['voiceIsolation'], isTrue);
+      expect(systemDefault['optional'], isNull);
+      expect(systemDefault['echoCancellation'], isTrue);
+      expect(systemDefault['autoGainControl'], isTrue);
+      expect(systemDefault['noiseSuppression'], isTrue);
+      expect(systemDefault['voiceIsolation'], isTrue);
     } else {
       expect(enabled['optional'], isNotEmpty);
+      expect(disabled['noiseSuppression'], isNull);
     }
   });
 
