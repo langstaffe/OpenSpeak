@@ -9239,6 +9239,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
 
   Widget buildMobileChannelList() {
     final voiceStatesByUserId = displayVoiceStatesByUserId();
+    final currentVoiceChannelId = currentVoiceChannel()?.id;
     return ColoredBox(
       color: OsColors.sidebar,
       child: Column(
@@ -9266,9 +9267,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                       final channel = channels[index];
                       return MobileChannelCard(
                         channel: channel,
-                        selected:
-                            chatScope == ChatScope.channel &&
-                            selectedChannel?.id == channel.id,
+                        selected: currentVoiceChannelId == channel.id,
                         unreadCount: channelUnreadCounts[channel.id] ?? 0,
                         mentionCount: channelMentionCounts[channel.id] ?? 0,
                         members: presence.users
@@ -18812,7 +18811,8 @@ class MobileChannelCard extends StatelessWidget {
           color: selected ? OsColors.rowSelected : OsColors.rowHover,
           borderRadius: BorderRadius.circular(14),
           clipBehavior: Clip.antiAlias,
-          child: InkWell(
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
             onDoubleTap: onDoubleTap,
             child: Container(
               constraints: const BoxConstraints(minHeight: 58),
@@ -18853,29 +18853,47 @@ class MobileChannelCard extends StatelessWidget {
                           ),
                         ),
                       ),
-                      UnreadBadge(
-                        count: unreadCount > 0 ? unreadCount : mentionCount,
-                        compact: true,
-                      ),
-                      const SizedBox(width: 6),
-                      IconButton(
-                        key: ValueKey('mobile-channel-open-${channel.id}'),
-                        tooltip: '进入频道聊天',
-                        onPressed: onOpen,
-                        padding: EdgeInsets.zero,
-                        alignment: Alignment.center,
-                        style: IconButton.styleFrom(
-                          backgroundColor: OsColors.sidebarBottom,
-                          foregroundColor: OsColors.dim,
-                          side: const BorderSide(color: OsColors.panelBorder),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10),
+                      Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          IconButton(
+                            key: ValueKey('mobile-channel-open-${channel.id}'),
+                            tooltip: '进入频道聊天',
+                            onPressed: onOpen,
+                            padding: EdgeInsets.zero,
+                            alignment: Alignment.center,
+                            style: IconButton.styleFrom(
+                              backgroundColor: OsColors.sidebarBottom,
+                              foregroundColor: OsColors.dim,
+                              side: const BorderSide(
+                                color: OsColors.panelBorder,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              fixedSize: const Size(40, 40),
+                              minimumSize: const Size(40, 40),
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            icon: const Icon(
+                              Icons.chevron_right_rounded,
+                              size: 28,
+                            ),
                           ),
-                          fixedSize: const Size(40, 40),
-                          minimumSize: const Size(40, 40),
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
-                        icon: const Icon(Icons.chevron_right_rounded, size: 28),
+                          if (hasUnread)
+                            Positioned(
+                              left: -7,
+                              top: -5,
+                              child: IgnorePointer(
+                                child: UnreadBadge(
+                                  count: unreadCount > 0
+                                      ? unreadCount
+                                      : mentionCount,
+                                  compact: true,
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
                     ],
                   ),

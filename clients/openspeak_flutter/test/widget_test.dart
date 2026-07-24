@@ -121,7 +121,7 @@ void main() {
           body: MobileChannelCard(
             channel: Channel(id: 'one', name: '1', sortOrder: 0),
             selected: false,
-            unreadCount: 0,
+            unreadCount: 2,
             mentionCount: 0,
             members: const [],
             voiceStatesByUserId: const {},
@@ -138,8 +138,19 @@ void main() {
     await tester.pumpAndSettle();
     expect(opens, 0);
     expect(joins, 0);
-
     final openButton = find.byKey(const ValueKey('mobile-channel-open-one'));
+    expect(
+      find.descendant(
+        of: find.byType(MobileChannelCard),
+        matching: find.byType(InkWell),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: openButton, matching: find.byType(InkWell)),
+      findsOneWidget,
+    );
+
     final openIcon = find.descendant(
       of: openButton,
       matching: find.byIcon(Icons.chevron_right_rounded),
@@ -147,6 +158,12 @@ void main() {
     expect(tester.getSize(openButton), const Size.square(40));
     expect(tester.getSize(openIcon), const Size.square(28));
     expect(tester.getCenter(openIcon), tester.getCenter(openButton));
+    expect(
+      tester
+          .getRect(find.byType(UnreadBadge))
+          .overlaps(tester.getRect(openButton)),
+      isTrue,
+    );
     await tester.tap(openButton);
     await tester.pump();
     expect(opens, 1);
