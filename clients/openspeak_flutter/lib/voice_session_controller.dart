@@ -18,20 +18,6 @@ const _noiseFloorMultiplier = 1.8;
 const _windowsWebRtcLevelIdleDelay = Duration(milliseconds: 120);
 const _microphoneThresholdReleaseDelay = Duration(milliseconds: 250);
 
-bool audioEnergyIndicatesActivity(
-  num energyDelta,
-  num durationDelta, {
-  double noiseFloorRms = 0,
-}) {
-  if (energyDelta <= 0 || durationDelta <= 0) return false;
-  final rms = math.sqrt(energyDelta / durationDelta);
-  final threshold = math.max(
-    _minimumVoiceAudioRms,
-    noiseFloorRms * _noiseFloorMultiplier,
-  );
-  return rms >= threshold;
-}
-
 double effectiveParticipantOutputVolume(
   double outputVolume,
   double participantVolume,
@@ -640,18 +626,6 @@ Set<String> withLocalSpeakingState(
   return next;
 }
 
-class _AudioEnergySample {
-  const _AudioEnergySample({
-    required this.energy,
-    required this.duration,
-    required this.noiseFloorRms,
-  });
-
-  final num? energy;
-  final num? duration;
-  final double noiseFloorRms;
-}
-
 class VoiceSessionSnapshot {
   const VoiceSessionSnapshot({
     required this.connecting,
@@ -843,7 +817,6 @@ class VoiceSessionController extends ChangeNotifier {
   double _outputVolume = 1.0;
   final Map<String, double> _participantOutputVolumes = {};
   Timer? _speakingSyncTimer;
-  Timer? _speakingPollTimer;
   Timer? _serverLatencyTimer;
   Timer? _audioStatsTimer;
   Timer? _liveKitReconnectTimer;
@@ -854,7 +827,6 @@ class VoiceSessionController extends ChangeNotifier {
   bool _disposed = false;
   bool _latencyMeasurementInFlight = false;
   bool _audioStatsPollInFlight = false;
-  bool _audioActivityPollInFlight = false;
   Object? _microphonePreviewOwner;
   Future<void> Function()? _releaseMicrophonePreview;
   OpenSpeakApi? _latencyApi;
@@ -866,7 +838,6 @@ class VoiceSessionController extends ChangeNotifier {
   final Map<String, num> _receiverJitterBufferEmittedCount = {};
   final Map<String, num> _senderPacketsSent = {};
   final Map<String, num> _senderPacketsLost = {};
-  final Map<String, _AudioEnergySample> _audioEnergySamples = {};
   Future<void> _microphoneRoutingTail = Future<void>.value();
   Future<void> _mediaRoutingTail = Future<void>.value();
   int _microphoneRoutingRevision = 0;
@@ -1793,7 +1764,6 @@ class VoiceSessionController extends ChangeNotifier {
           voiceState: state,
         ),
       );
-      _startSpeakingPoll();
       _startAudioStatsPoll();
       _refreshRoomSnapshot();
     } catch (error, stackTrace) {
@@ -1951,8 +1921,6 @@ class VoiceSessionController extends ChangeNotifier {
     _persistentChannelSwitchIsolated = false;
     _speakingSyncTimer?.cancel();
     _speakingSyncTimer = null;
-    _speakingPollTimer?.cancel();
-    _speakingPollTimer = null;
     _audioStatsTimer?.cancel();
     _audioStatsTimer = null;
 
@@ -2860,197 +2828,6 @@ class VoiceSessionController extends ChangeNotifier {
     return (safeLost / safeTotal * 100).clamp(0.0, 100.0).toDouble();
   }
 
-  void _startSpeakingPoll() {
-    _speakingPollTimer?.cancel();
-    unawaited(_pollAudioActivity());
-    _speakingPollTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
-      unawaited(_pollAudioActivity());
-    });
-  }
-
-  Future<void> _pollAudioActivity() async {
-    final room = _room;
-    if (room == null || !snapshot.connected || _audioActivityPollInFlight) {
-      return;
-    }
-    _audioActivityPollInFlight = true;
-    final participantUserIds = <String>{};
-    final speakingUserIds = <String>{};
-    final sampledKeys = <String>{};
-    var localAudioActive = false;
-    var localInputRms = 0.0;
-    try {
-      final localParticipant = room.localParticipant;
-      if (localParticipant != null && localParticipant.identity.isNotEmpty) {
-        final identity = localParticipant.identity;
-        participantUserIds.add(identity);
-        if (_microphoneMonitorTrack == null) {
-          for (final publication in localParticipant.audioTrackPublications) {
-            final track = publication.track;
-            if (track == null) continue;
-            final stats = await track.getSenderStats();
-            if (stats == null) continue;
-            final source = stats.audioSourceStats;
-            final key = 'local:$identity:${publication.sid}';
-            sampledKeys.add(key);
-            final sample = _sampleAudioActivity(
-              key,
-              level: source?.audioLevel,
-              totalEnergy: source?.totalAudioEnergy,
-              totalDuration: source?.totalSamplesDuration,
-            );
-            localInputRms = math.max(localInputRms, sample.rms);
-            if (sample.active) localAudioActive = true;
-          }
-          await _updateMicrophoneThresholdGate(localInputRms);
-          final activationActive =
-              _microphoneActivationMode ==
-                  MicrophoneActivationMode.voiceThreshold
-              ? _thresholdGateOpen
-              : localAudioActive;
-          if (_microphoneGateOpen &&
-              (activationActive || localParticipant.isSpeaking)) {
-            speakingUserIds.add(identity);
-          }
-        }
-        if (snapshot.speaking) {
-          speakingUserIds.add(identity);
-        }
-      }
-
-      for (final participant in room.remoteParticipants.values) {
-        final identity = participant.identity;
-        if (identity.isEmpty || !_participantInCurrentChannel(identity)) {
-          continue;
-        }
-        participantUserIds.add(identity);
-        var remoteAudioActive = false;
-        for (final publication in participant.audioTrackPublications) {
-          final track = publication.track;
-          if (track == null || !publication.subscribed || publication.muted) {
-            continue;
-          }
-          final stats = await track.getReceiverStats();
-          if (stats == null) continue;
-          final source = stats.audioSourceStats;
-          final key = 'remote:$identity:${publication.sid}';
-          sampledKeys.add(key);
-          if (_sampleHasAudioActivity(
-            key,
-            level: source?.audioLevel,
-            totalEnergy: source?.totalAudioEnergy ?? stats.totalAudioEnergy,
-            totalDuration:
-                source?.totalSamplesDuration ?? stats.totalSamplesDuration,
-          )) {
-            remoteAudioActive = true;
-          }
-        }
-        if (remoteAudioActive || participant.isSpeaking) {
-          speakingUserIds.add(identity);
-        }
-      }
-
-      _audioEnergySamples.removeWhere((key, _) => !sampledKeys.contains(key));
-      if (_microphoneMonitorTrack == null) {
-        final nextInputLevel = microphoneLevelFromRms(localInputRms);
-        if ((microphoneInputLevel.value - nextInputLevel).abs() >= 0.01 ||
-            nextInputLevel == 0) {
-          microphoneInputLevel.value = nextInputLevel;
-        }
-        microphoneInputActive.value = localAudioActive;
-      }
-      if (!setEquals(snapshot.liveKitParticipantUserIds, participantUserIds) ||
-          !setEquals(snapshot.liveKitSpeakingUserIds, speakingUserIds)) {
-        _setSnapshot(
-          snapshot.copyWith(
-            liveKitParticipantUserIds: participantUserIds,
-            liveKitSpeakingUserIds: speakingUserIds,
-          ),
-        );
-      }
-      if (_microphoneMonitorTrack == null) {
-        final activationActive =
-            _microphoneActivationMode == MicrophoneActivationMode.voiceThreshold
-            ? _thresholdGateOpen
-            : localAudioActive;
-        _setLocalSpeaking(
-          activationActive || room.localParticipant?.isSpeaking == true,
-        );
-      }
-    } catch (_) {
-      // Audio-level polling is best-effort; LiveKit speaking events remain as
-      // a fallback on platforms that omit WebRTC energy statistics.
-    } finally {
-      _audioActivityPollInFlight = false;
-    }
-  }
-
-  ({bool active, double rms}) _sampleAudioActivity(
-    String key, {
-    required num? level,
-    required num? totalEnergy,
-    required num? totalDuration,
-  }) {
-    final previous = _audioEnergySamples[key];
-    double? intervalRms;
-    if (previous?.energy != null &&
-        previous?.duration != null &&
-        totalEnergy != null &&
-        totalDuration != null) {
-      final energyDelta = totalEnergy - previous!.energy!;
-      final durationDelta = totalDuration - previous.duration!;
-      if (energyDelta >= 0 && durationDelta > 0) {
-        intervalRms = math.sqrt(energyDelta / durationDelta);
-      }
-    }
-    final reportedLevel = level?.toDouble();
-    final observedRms = switch ((reportedLevel, intervalRms)) {
-      (final double reported, final double interval) => math.max(
-        reported,
-        interval,
-      ),
-      (final double reported, null) => reported,
-      (null, final double interval) => interval,
-      _ => null,
-    };
-    if (previous == null) {
-      _audioEnergySamples[key] = _AudioEnergySample(
-        energy: totalEnergy,
-        duration: totalDuration,
-        noiseFloorRms: observedRms ?? 0,
-      );
-      return (active: false, rms: observedRms ?? 0);
-    }
-    if (observedRms == null) return (active: false, rms: 0);
-    final active =
-        observedRms >=
-        math.max(
-          _minimumVoiceAudioRms,
-          previous.noiseFloorRms * _noiseFloorMultiplier,
-        );
-    final nextNoiseFloor = active
-        ? previous.noiseFloorRms
-        : previous.noiseFloorRms * 0.9 + observedRms * 0.1;
-    _audioEnergySamples[key] = _AudioEnergySample(
-      energy: totalEnergy ?? previous.energy,
-      duration: totalDuration ?? previous.duration,
-      noiseFloorRms: nextNoiseFloor,
-    );
-    return (active: active, rms: observedRms);
-  }
-
-  bool _sampleHasAudioActivity(
-    String key, {
-    required num? level,
-    required num? totalEnergy,
-    required num? totalDuration,
-  }) => _sampleAudioActivity(
-    key,
-    level: level,
-    totalEnergy: totalEnergy,
-    totalDuration: totalDuration,
-  ).active;
-
   Future<void> _updateMicrophoneThresholdGate(double rms) async {
     if (_microphoneActivationMode != MicrophoneActivationMode.voiceThreshold) {
       return;
@@ -3210,19 +2987,19 @@ class VoiceSessionController extends ChangeNotifier {
       participantUserIds.add(participant.identity);
     }
     final speakingUserIds = withLocalSpeakingState(
-      snapshot.liveKitSpeakingUserIds.where(participantUserIds.contains),
+      room.remoteParticipants.values
+          .where(
+            (participant) =>
+                participant.identity.isNotEmpty &&
+                _participantInCurrentChannel(participant.identity) &&
+                participant.isSpeaking,
+          )
+          .map((participant) => participant.identity),
       localUserId: localParticipant?.identity,
       speaking:
           snapshot.speaking ||
           (localParticipant?.isSpeaking == true && _shouldReportSpeaking()),
     );
-    for (final participant in room.remoteParticipants.values) {
-      if (participant.identity.isEmpty ||
-          !_participantInCurrentChannel(participant.identity)) {
-        continue;
-      }
-      if (participant.isSpeaking) speakingUserIds.add(participant.identity);
-    }
     final currentChannelRemoteParticipants = _currentChannelRemoteParticipants(
       room,
     );
@@ -4157,7 +3934,6 @@ class VoiceSessionController extends ChangeNotifier {
     _receiverJitterBufferEmittedCount.clear();
     _senderPacketsSent.clear();
     _senderPacketsLost.clear();
-    _audioEnergySamples.clear();
     if (room == null) {
       await routingDone;
     } else {
@@ -4213,7 +3989,6 @@ class VoiceSessionController extends ChangeNotifier {
     _intentionalLeave = true;
     _cancelLiveKitReconnect(resetAttempts: true);
     _speakingSyncTimer?.cancel();
-    _speakingPollTimer?.cancel();
     _serverLatencyTimer?.cancel();
     _audioStatsTimer?.cancel();
     _thresholdGateReleaseTimer?.cancel();

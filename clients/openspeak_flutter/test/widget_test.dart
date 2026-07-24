@@ -2608,16 +2608,7 @@ void main() {
     expect(avatar.size, 36);
   });
 
-  test('audio energy gate ignores floor noise but keeps quiet speech', () {
-    expect(
-      audioEnergyIndicatesActivity(4e-10, 0.01, noiseFloorRms: 0.0002),
-      isFalse,
-    );
-    expect(
-      audioEnergyIndicatesActivity(1e-8, 0.01, noiseFloorRms: 0.0002),
-      isTrue,
-    );
-    expect(audioEnergyIndicatesActivity(0, 0.01), isFalse);
+  test('microphone activity and packet counters reject idle samples', () {
     expect(microphoneRmsIndicatesActivity(0.004), isTrue);
     expect(microphoneRmsIndicatesActivity(0.0002), isFalse);
     expect(packetCounterDelta(120, 100), 20);
