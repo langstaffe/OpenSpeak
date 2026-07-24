@@ -70,6 +70,23 @@ const mobileWebBreakpoint = 720.0;
 bool useMobileWebLayout({required bool isWeb, required double width}) =>
     isWeb && width < mobileWebBreakpoint;
 
+double? messageListCacheExtent({required bool isWeb, required double width}) =>
+    useMobileWebLayout(isWeb: isWeb, width: width) ? null : 900;
+
+int? imagePreviewCacheWidth({
+  required bool isWeb,
+  required double viewportWidth,
+  required double sourceWidth,
+  required double displayWidth,
+  required double devicePixelRatio,
+}) {
+  if (!useMobileWebLayout(isWeb: isWeb, width: viewportWidth)) return null;
+  return math.max(
+    1,
+    math.min(sourceWidth, displayWidth * devicePixelRatio).round(),
+  );
+}
+
 String initialServerUrl() {
   if (!kIsWeb) return defaultServerUrl;
   final base = Uri.base;
@@ -10189,6 +10206,10 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   }
 
   Widget buildChatBody({required bool directEnabled}) {
+    final cacheExtent = messageListCacheExtent(
+      isWeb: kIsWeb,
+      width: MediaQuery.sizeOf(context).width,
+    );
     final channel = selectedChannel;
     if (chatScope == ChatScope.direct) {
       final peer = selectedDirectUser();
@@ -10210,7 +10231,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
           reverse: true,
           physics: smoothWheelChildPhysics,
           // ignore: deprecated_member_use
-          cacheExtent: 900,
+          cacheExtent: cacheExtent,
           padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
           itemCount: messages.length,
           itemBuilder: (context, index) {
@@ -10302,7 +10323,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         reverse: true,
         physics: smoothWheelChildPhysics,
         // ignore: deprecated_member_use
-        cacheExtent: 900,
+        cacheExtent: cacheExtent,
         padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
         itemCount: channelMessages.length,
         itemBuilder: (context, index) {
@@ -15725,6 +15746,17 @@ class _MessagePlainTextState extends State<_MessagePlainText> {
 
   @override
   Widget build(BuildContext context) {
+    if (useMobileWebLayout(
+      isWeb: kIsWeb,
+      width: MediaQuery.sizeOf(context).width,
+    )) {
+      return SelectableText(
+        widget.text,
+        textAlign: widget.textAlign,
+        style: widget.style,
+        contextMenuBuilder: _buildContextMenu,
+      );
+    }
     return Listener(
       onPointerDown: _handlePointerDown,
       onPointerUp: _handlePointerEnd,
@@ -16547,6 +16579,13 @@ class _ImageAttachmentPreviewState extends State<ImageAttachmentPreview> {
                     maxWidth: maxWidth,
                     maxHeight: _maxImagePreviewHeight,
                   );
+                  final cacheWidth = imagePreviewCacheWidth(
+                    isWeb: kIsWeb,
+                    viewportWidth: MediaQuery.sizeOf(context).width,
+                    sourceWidth: image.size.width,
+                    displayWidth: displaySize.width,
+                    devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
+                  );
                   return Stack(
                     children: [
                       InkWell(
@@ -16564,6 +16603,7 @@ class _ImageAttachmentPreviewState extends State<ImageAttachmentPreview> {
                                     image.bytes!,
                                     width: displaySize.width,
                                     height: displaySize.height,
+                                    cacheWidth: cacheWidth,
                                     fit: BoxFit.contain,
                                     filterQuality: FilterQuality.medium,
                                     errorBuilder: (_, _, _) =>
@@ -16575,6 +16615,7 @@ class _ImageAttachmentPreviewState extends State<ImageAttachmentPreview> {
                                     image.file!,
                                     width: displaySize.width,
                                     height: displaySize.height,
+                                    cacheWidth: cacheWidth,
                                     fit: BoxFit.contain,
                                     filterQuality: FilterQuality.medium,
                                     errorBuilder: (_, _, _) =>

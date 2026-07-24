@@ -33,6 +33,83 @@ void main() {
     expect(useMobileWebLayout(isWeb: false, width: 320), isFalse);
   });
 
+  test('mobile Web chat uses the default list cache extent', () {
+    expect(messageListCacheExtent(isWeb: true, width: 719), isNull);
+    expect(messageListCacheExtent(isWeb: true, width: 720), 900);
+    expect(messageListCacheExtent(isWeb: false, width: 390), 900);
+  });
+
+  test(
+    'mobile Web image previews decode only to their display pixel width',
+    () {
+      expect(
+        imagePreviewCacheWidth(
+          isWeb: true,
+          viewportWidth: 390,
+          sourceWidth: 4000,
+          displayWidth: 360,
+          devicePixelRatio: 3,
+        ),
+        1080,
+      );
+      expect(
+        imagePreviewCacheWidth(
+          isWeb: true,
+          viewportWidth: 390,
+          sourceWidth: 640,
+          displayWidth: 360,
+          devicePixelRatio: 3,
+        ),
+        640,
+      );
+      expect(
+        imagePreviewCacheWidth(
+          isWeb: true,
+          viewportWidth: 720,
+          sourceWidth: 4000,
+          displayWidth: 360,
+          devicePixelRatio: 3,
+        ),
+        isNull,
+      );
+    },
+  );
+
+  testWidgets('mobile Web plain messages avoid intrinsic text layout', (
+    tester,
+  ) async {
+    if (!kIsWeb) return;
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Align(
+            alignment: Alignment.topLeft,
+            child: MessageBodyText(
+              body: '可选择的消息',
+              mine: false,
+              onOpenLink: (_) async {},
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byType(SelectableText), findsOneWidget);
+    expect(find.byType(TextField), findsNothing);
+    expect(find.byType(IntrinsicWidth), findsNothing);
+    expect(
+      tester
+          .widget<SelectableText>(find.byType(SelectableText))
+          .contextMenuBuilder,
+      isNotNull,
+    );
+  });
+
   testWidgets('mobile channel card separates chat and voice gestures', (
     tester,
   ) async {
