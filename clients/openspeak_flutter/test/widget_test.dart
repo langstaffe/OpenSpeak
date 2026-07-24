@@ -63,7 +63,13 @@ void main() {
     expect(joins, 0);
 
     final openButton = find.byKey(const ValueKey('mobile-channel-open-one'));
-    expect(tester.getSize(openButton), const Size.square(34));
+    final openIcon = find.descendant(
+      of: openButton,
+      matching: find.byIcon(Icons.chevron_right_rounded),
+    );
+    expect(tester.getSize(openButton), const Size.square(40));
+    expect(tester.getSize(openIcon), const Size.square(28));
+    expect(tester.getCenter(openIcon), tester.getCenter(openButton));
     await tester.tap(openButton);
     await tester.pump();
     expect(opens, 1);
