@@ -29,92 +29,6 @@ import (
 	"openspeak/internal/store"
 )
 
-type Repository interface {
-	CreateUser(ctx context.Context, displayName string) (store.User, error)
-	GetUser(ctx context.Context, userID string) (store.User, error)
-	UpdateUserDisplayName(ctx context.Context, userID, displayName string) (store.User, error)
-	IncrementUserAvatarVersion(ctx context.Context, userID, avatarHash string) (store.User, error)
-	IncrementServerAvatarVersion(ctx context.Context, serverID, avatarHash string) (store.OSServer, error)
-	RegisterDevice(ctx context.Context, d store.Device) (store.Device, error)
-	TouchDevice(ctx context.Context, deviceID string) error
-	CreateServer(ctx context.Context, s store.OSServer) (store.OSServer, error)
-	ListServers(ctx context.Context) ([]store.OSServer, error)
-	GetServer(ctx context.Context, serverID string) (store.OSServer, error)
-	GetServerPasswordHash(ctx context.Context, serverID string) (string, error)
-	UpdateServer(ctx context.Context, serverID string, name *string, encryptionMode *string, fileRoot *string, historyRetentionDays *int, serverPasswordHash *string, screenSharePolicy *store.ScreenSharePolicy, defaultChannelID *string, attachmentExternalEnabled *bool, attachmentFileNodeID *string, voiceAudioBitrateKbps *int, screenShareBitrateLimits *store.ScreenShareBitrateLimits) (store.OSServer, error)
-	UpdateServerTLS(ctx context.Context, serverID, certificateType, identifier, status, tlsError string, expiresAt *time.Time, encryptionMode *string) (store.OSServer, error)
-	SetServerMember(ctx context.Context, serverID, userID, role string, permissions []string) (store.ServerMember, error)
-	ListServerMembers(ctx context.Context, serverID string) ([]store.ServerMember, error)
-	GetServerMember(ctx context.Context, serverID, userID string) (store.ServerMember, error)
-	FindUserByClientInstallation(ctx context.Context, serverID, installationHash string) (store.User, error)
-	BindClientInstallation(ctx context.Context, serverID, installationHash, userID, displayName string) error
-	TouchClientInstallation(ctx context.Context, serverID, installationHash, userID, displayName string) error
-	IsClientInstallationBanned(ctx context.Context, serverID, installationHash string) (store.ServerBan, bool, error)
-	IsServerUserBanned(ctx context.Context, serverID, userID string) (store.ServerBan, bool, error)
-	ListManagedServerMembers(ctx context.Context, serverID string) ([]store.ManagedServerMember, error)
-	CreateServerBan(ctx context.Context, serverID, userID, reason, actorUserID string, expiresAt *time.Time) (store.ServerBan, error)
-	RevokeServerBan(ctx context.Context, serverID, userID, actorUserID string) error
-	CreateMediaNode(ctx context.Context, node store.MediaNode) (store.MediaNode, error)
-	ListMediaNodes(ctx context.Context, serverID string) ([]store.MediaNode, error)
-	GetMediaNode(ctx context.Context, serverID, nodeID string) (store.MediaNode, error)
-	UpdateMediaNode(ctx context.Context, serverID, nodeID string, patch store.MediaNodePatch) (store.MediaNode, error)
-	SelectMediaNode(ctx context.Context, serverID string) (store.MediaNode, error)
-	CreateFileNode(ctx context.Context, node store.FileNode) (store.FileNode, error)
-	ListFileNodes(ctx context.Context, serverID string) ([]store.FileNode, error)
-	GetFileNode(ctx context.Context, serverID, nodeID string) (store.FileNode, error)
-	UpdateFileNode(ctx context.Context, serverID, nodeID string, patch store.FileNodePatch) (store.FileNode, error)
-	IsServerOwnerOrAdmin(ctx context.Context, serverID, userID string) (bool, error)
-	IsServerOwnerOrHasPermission(ctx context.Context, serverID, userID, permission string) (bool, error)
-	GetServerRolePermissions(ctx context.Context, serverID string) (store.ServerRolePermissions, error)
-	SetServerRolePermissions(ctx context.Context, serverID string, admin, user []string, actorUserID string) (store.ServerRolePermissions, error)
-	GetMessageRetractWindowMinutes(ctx context.Context, serverID string) (int, error)
-	SetMessageRetractWindowMinutes(ctx context.Context, serverID string, minutes int) error
-	EffectiveServerPermissions(ctx context.Context, serverID, userID string) ([]string, error)
-	IsServerMember(ctx context.Context, serverID, userID string) (bool, error)
-	IsChannelServerOwnerOrAdmin(ctx context.Context, channelID, userID string) (bool, error)
-	IsChannelServerOwnerOrHasPermission(ctx context.Context, channelID, userID, permission string) (bool, error)
-	IsDeviceOwnerOrAdmin(ctx context.Context, deviceID, userID string) (bool, error)
-	GetDevice(ctx context.Context, deviceID string) (store.Device, error)
-	IsChannelMemberOrOwnerOrAdmin(ctx context.Context, channelID, userID string) (bool, error)
-	CreateChannel(ctx context.Context, c store.Channel) (store.Channel, error)
-	GetChannel(ctx context.Context, channelID string) (store.Channel, error)
-	UpdateChannel(ctx context.Context, channelID string, name *string, sortOrder *int) (store.Channel, error)
-	DeleteChannel(ctx context.Context, channelID string) error
-	ListChannels(ctx context.Context, serverID string) ([]store.Channel, error)
-	AddChannelMember(ctx context.Context, channelID, userID, role string) error
-	ListChannelMembers(ctx context.Context, channelID string) ([]store.ChannelMember, error)
-	LeaveChannel(ctx context.Context, channelID, userID string) error
-	CreateEpoch(ctx context.Context, channelID, reason string) (store.ChannelEpoch, error)
-	RotateServerChannelEpochs(ctx context.Context, serverID, reason string) ([]store.ChannelEpoch, error)
-	GetLatestEpoch(ctx context.Context, channelID string) (store.ChannelEpoch, error)
-	ListChannelDevices(ctx context.Context, channelID, epochID string, media bool) ([]store.ChannelDevice, error)
-	StoreEnvelopeBatch(ctx context.Context, channelID, epochID, senderDeviceID, senderUserID string, envelopes []store.KeyEnvelope, media bool) ([]store.KeyEnvelope, error)
-	ListEnvelopes(ctx context.Context, recipientDeviceID string, channelID *string, media bool) ([]store.KeyEnvelope, error)
-	StoreChannelMessage(ctx context.Context, m store.ChannelMessage) (store.ChannelMessage, error)
-	GetChannelMessage(ctx context.Context, messageID string) (store.ChannelMessage, error)
-	DeleteChannelMessage(ctx context.Context, messageID, removalKind string) error
-	ListChannelMessages(ctx context.Context, channelID string, limit int) ([]store.ChannelMessage, error)
-	StoreFile(ctx context.Context, f store.StoredFile) (store.StoredFile, error)
-	GetFile(ctx context.Context, fileID string) (store.StoredFile, error)
-	DeleteFile(ctx context.Context, fileID string) error
-	CreateAuditLog(ctx context.Context, entry store.AuditLog) (store.AuditLog, error)
-	ListAuditLogs(ctx context.Context, serverID string, limit int) ([]store.AuditLog, error)
-	CreateOwnerSecurity(ctx context.Context, serverID, ownerUserID, claimTokenHash string, claimExpiresAt time.Time) (store.OwnerSecurity, error)
-	GetOwnerSecurity(ctx context.Context, serverID string) (store.OwnerSecurity, error)
-	FindOwnerSecurityByUser(ctx context.Context, userID string) (store.OwnerSecurity, error)
-	ListOwnerSecurities(ctx context.Context) ([]store.OwnerSecurity, error)
-	ClaimOwner(ctx context.Context, serverID, tokenHash string, device store.OwnerDevice) (store.OwnerSecurity, store.OwnerDevice, error)
-	GetOwnerDevice(ctx context.Context, serverID, deviceID string) (store.OwnerDevice, error)
-	ListOwnerDevices(ctx context.Context, serverID string) ([]store.OwnerDevice, error)
-	ValidateOwnerSession(ctx context.Context, serverID, userID, deviceID string, authGeneration, sessionGeneration int64) (store.OwnerDevice, error)
-	CreateOwnerPairingToken(ctx context.Context, serverID, tokenHash, creatorDeviceID string, expiresAt time.Time) error
-	ConsumeOwnerPairingToken(ctx context.Context, serverID, tokenHash string, device store.OwnerDevice) (store.OwnerSecurity, store.OwnerDevice, error)
-	KickOwnerDevice(ctx context.Context, serverID, deviceID string) (store.OwnerDevice, error)
-	RevokeOwnerDevice(ctx context.Context, serverID, deviceID string) error
-	GetWebSettings(ctx context.Context) (store.WebSettings, error)
-	UpdateWebSettings(ctx context.Context, enabled, customPathEnabled bool, path string) (store.WebSettings, error)
-}
-
 func (s *Server) RunOwnerCredentialMonitor(ctx context.Context) {
 	known := map[string]int64{}
 	poll := func() {
@@ -153,7 +67,7 @@ type authContext struct {
 
 type Server struct {
 	cfg              config.Config
-	repo             Repository
+	repo             *store.SQLite
 	hub              *realtime.Hub
 	directFiles      *directFileStore
 	linkPreviews     *linkPreviewCache
@@ -204,7 +118,7 @@ type CurrentUserState struct {
 	SelectedChannelID *string  `json:"selected_channel_id,omitempty"`
 }
 
-func NewServer(cfg config.Config, repo Repository, hub *realtime.Hub) *Server {
+func NewServer(cfg config.Config, repo *store.SQLite, hub *realtime.Hub) *Server {
 	server := &Server{
 		cfg:              cfg,
 		repo:             repo,

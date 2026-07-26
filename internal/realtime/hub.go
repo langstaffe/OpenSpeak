@@ -248,20 +248,6 @@ func (h *Hub) DisconnectOwnerDevice(serverID, ownerDeviceID, eventType string) {
 	}
 }
 
-func (h *Hub) DisconnectAllOwnerDevices(serverID, eventType string) {
-	h.mu.RLock()
-	deviceIDs := map[string]struct{}{}
-	for client := range h.byServer[serverID] {
-		if client.OwnerDeviceID != "" {
-			deviceIDs[client.OwnerDeviceID] = struct{}{}
-		}
-	}
-	h.mu.RUnlock()
-	for deviceID := range deviceIDs {
-		h.DisconnectOwnerDevice(serverID, deviceID, eventType)
-	}
-}
-
 func (h *Hub) DisconnectOwnerUser(serverID, ownerUserID, eventType string) {
 	h.mu.RLock()
 	targets := make([]*Client, 0)

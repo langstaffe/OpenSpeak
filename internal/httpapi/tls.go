@@ -551,7 +551,7 @@ func buildPlainCaddyfile(certificateType, identifier, backend, livekit string, p
 
 // DisableTLSFromHost is the root-only recovery path used by openspeakctl when
 // an expired certificate prevents the normal owner-confirmed downgrade flow.
-func DisableTLSFromHost(ctx context.Context, cfg config.Config, repo Repository, serverID string) (store.OSServer, string, error) {
+func DisableTLSFromHost(ctx context.Context, cfg config.Config, repo *store.SQLite, serverID string) (store.OSServer, string, error) {
 	server, err := repo.GetServer(ctx, serverID)
 	if err != nil {
 		return store.OSServer{}, "", err
@@ -576,7 +576,7 @@ func canDisableTLS(server store.OSServer) bool {
 		(server.EncryptionMode == "transport" || server.EncryptionMode == "e2ee")
 }
 
-func disableServerTLS(ctx context.Context, cfg config.TLSConfig, repo Repository, server store.OSServer) (store.OSServer, string, error) {
+func disableServerTLS(ctx context.Context, cfg config.TLSConfig, repo *store.SQLite, server store.OSServer) (store.OSServer, string, error) {
 	adminURL := strings.TrimRight(cfg.CaddyAdminURL, "/")
 	oldConfig, err := caddyRequest(ctx, http.MethodGet, adminURL, "/config/", "", nil)
 	if err != nil {

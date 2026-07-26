@@ -76,16 +76,7 @@ func main() {
 	}
 }
 
-type retentionCleaner interface {
-	DeleteExpiredRetainedMessages(ctx context.Context) error
-	ListExpiredRetainedFiles(ctx context.Context) ([]store.StoredFile, error)
-}
-
-type retainedFileCleaner interface {
-	CleanupRetainedFile(ctx context.Context, file store.StoredFile) error
-}
-
-func runRetentionCleaner(ctx context.Context, cleaner retentionCleaner, files retainedFileCleaner) {
+func runRetentionCleaner(ctx context.Context, cleaner *store.SQLite, files *apphttp.Server) {
 	ticker := time.NewTicker(6 * time.Hour)
 	defer ticker.Stop()
 	for {

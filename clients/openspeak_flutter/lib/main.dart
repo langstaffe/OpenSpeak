@@ -29,6 +29,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart' as rtc;
 import 'package:livekit_client/livekit_client.dart' as lk;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 import 'attachment_cache_service.dart';
 import 'browser_actions.dart';
 import 'client_log.dart';
@@ -1288,7 +1289,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   final pushToTalkHotkey = GlobalPushToTalkHotkey();
 
   OpenSpeakApi? api;
-  OpenSpeakSocket? socket;
+  WebSocketChannel? socket;
   int socketGeneration = 0;
   Timer? realtimeStateRefreshTimer;
   Timer? channelEnvelopeRefreshTimer;
@@ -1465,7 +1466,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
 
   @override
   void dispose() {
-    socket?.close();
+    socket?.sink.close();
     realtimeStateRefreshTimer?.cancel();
     resetChannelKeyCoordination();
     voiceDisconnectSoundTimer?.cancel();
@@ -1990,7 +1991,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     resetChannelKeyCoordination();
     await leaveVoiceSession(clearVoiceState: true);
     voiceSession.stopServerLatencyMonitor();
-    await closingSocket?.close();
+    await closingSocket?.sink.close();
     if (!mounted) return;
     for (final task in uploadTasks) {
       task.cancelToken.cancel();
@@ -2568,7 +2569,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     final closingSocket = socket;
     socket = null;
     resetChannelKeyCoordination();
-    await closingSocket?.close();
+    await closingSocket?.sink.close();
     if (!isActiveConnectionGeneration(activeGeneration)) return;
     setState(() {
       error = null;
@@ -3036,7 +3037,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     );
     if (expectedConnectionGeneration != null &&
         !isActiveConnectionGeneration(expectedConnectionGeneration)) {
-      await nextSocket.close();
+      await nextSocket.sink.close();
       return false;
     }
     socketGeneration += 1;
@@ -3115,9 +3116,9 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     }
   }
 
-  Future<void> _readSocket(OpenSpeakSocket ws, int generation) async {
+  Future<void> _readSocket(WebSocketChannel ws, int generation) async {
     try {
-      await for (final raw in ws) {
+      await for (final raw in ws.stream) {
         if (!identical(socket, ws) || generation != socketGeneration) return;
         if (raw is! String) continue;
         final event = RealtimeEvent.fromJson(
@@ -3335,7 +3336,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   }
 
   Future<void> reconnectWebSocketAfterDrop(
-    OpenSpeakSocket droppedSocket,
+    WebSocketChannel droppedSocket,
     int generation,
   ) async {
     final connectionId = selectedConnection?.id;
@@ -3387,11 +3388,11 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
           await login();
           return;
         }
-        await socket?.close();
+        await socket?.sink.close();
       } catch (exception, stackTrace) {
         ClientLog.error('realtime.restore', exception, stackTrace);
         if (!identical(socket, droppedSocket)) {
-          await socket?.close();
+          await socket?.sink.close();
         } else {
           try {
             await client.listServers(auth.token);
@@ -4260,7 +4261,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
           'envelopes': prepared.envelopes,
         });
       }
-      ws.add(
+      ws.sink.add(
         jsonEncode({
           'type': 'direct.message_send',
           'to_user': peer.userId,
@@ -4492,7 +4493,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   }
 
   void retractDirectMessage(DirectMessage message) {
-    socket?.add(
+    socket?.sink.add(
       jsonEncode({
         'type': 'direct.message_delete',
         'payload': {'message_id': message.id},

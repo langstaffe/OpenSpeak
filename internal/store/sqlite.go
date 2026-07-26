@@ -102,12 +102,6 @@ func (s *SQLite) IncrementUserAvatarVersion(ctx context.Context, userID, avatarH
 	return u, err
 }
 
-func (s *SQLite) CountUsers(ctx context.Context) (int, error) {
-	var count int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&count)
-	return count, err
-}
-
 func (s *SQLite) RegisterDevice(ctx context.Context, d Device) (Device, error) {
 	if d.ID == "" {
 		d.ID = ids.New("dev")
@@ -1796,14 +1790,6 @@ func (s *SQLite) GetFile(ctx context.Context, fileID string) (StoredFile, error)
 
 func (s *SQLite) DeleteFile(ctx context.Context, fileID string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM stored_files WHERE id = ?`, fileID)
-	return err
-}
-
-func (s *SQLite) DeleteExpiredChannelHistory(ctx context.Context, before time.Time) error {
-	_, err := s.db.ExecContext(ctx, `
-		DELETE FROM channel_messages
-		WHERE created_at < ?
-	`, before.UTC().Format(dbTimeLayout))
 	return err
 }
 

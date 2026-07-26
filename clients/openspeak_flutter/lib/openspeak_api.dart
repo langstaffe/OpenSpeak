@@ -1938,7 +1938,7 @@ class OpenSpeakApi {
     return (uri: uri, withAuthorization: false);
   }
 
-  Future<OpenSpeakSocket> openWebSocket(
+  Future<WebSocketChannel> openWebSocket(
     String token,
     String deviceId,
     String serverId,
@@ -1955,7 +1955,7 @@ class OpenSpeakApi {
     );
     final channel = WebSocketChannel.connect(uri);
     await channel.ready;
-    return OpenSpeakSocket(channel);
+    return channel;
   }
 
   Future<dynamic> request(
@@ -2012,34 +2012,6 @@ class OpenSpeakApi {
       }
     }
   }
-}
-
-class OpenSpeakSocket extends Stream<dynamic> {
-  OpenSpeakSocket(this._channel);
-
-  final WebSocketChannel _channel;
-
-  int? get closeCode => _channel.closeCode;
-  String? get closeReason => _channel.closeReason;
-
-  void add(Object? value) => _channel.sink.add(value);
-
-  Future<void> close() async {
-    await _channel.sink.close();
-  }
-
-  @override
-  StreamSubscription<dynamic> listen(
-    void Function(dynamic event)? onData, {
-    Function? onError,
-    void Function()? onDone,
-    bool? cancelOnError,
-  }) => _channel.stream.listen(
-    onData,
-    onError: onError,
-    onDone: onDone,
-    cancelOnError: cancelOnError,
-  );
 }
 
 OpenSpeakException apiException(

@@ -18,14 +18,6 @@ class OwnerDeviceKey {
   final String publicKey;
 }
 
-class StoredOwnerCredential extends OwnerDeviceKey {
-  StoredOwnerCredential({
-    required super.deviceId,
-    required super.seed,
-    required super.publicKey,
-  });
-}
-
 class OwnerIdentityService {
   static const _credentialServersKey = 'openspeak.ownerCredentialServers.v1';
   static const _storage = FlutterSecureStorage(
@@ -62,12 +54,12 @@ class OwnerIdentityService {
     await _setCredentialHint(serverId, true);
   }
 
-  Future<StoredOwnerCredential?> loadCredential(String serverId) async {
+  Future<OwnerDeviceKey?> loadCredential(String serverId) async {
     final raw = await _storage.read(key: _key(serverId));
     if (raw == null || raw.isEmpty) return null;
     try {
       final json = jsonDecode(raw) as Map<String, dynamic>;
-      return StoredOwnerCredential(
+      return OwnerDeviceKey(
         deviceId: json['device_id'] as String,
         seed: Uint8List.fromList(base64Url.decode(json['seed'] as String)),
         publicKey: json['public_key'] as String,
