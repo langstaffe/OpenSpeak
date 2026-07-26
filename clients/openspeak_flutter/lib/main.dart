@@ -486,6 +486,24 @@ bool audioDeviceKindUnavailable(AudioDeviceMonitor monitor, String kind) =>
 
 enum ChatScope { channel, direct }
 
+bool channelChatIsVisible({
+  required ChatScope chatScope,
+  required String? selectedChannelId,
+  required String channelId,
+  required bool mobileWeb,
+  required bool mobileChatOpen,
+}) =>
+    chatScope == ChatScope.channel &&
+    selectedChannelId == channelId &&
+    (!mobileWeb || mobileChatOpen);
+
+bool channelMessageNeedsUnread({
+  required String channelId,
+  required String? currentChannelId,
+  required bool chatVisible,
+  required bool atBottom,
+}) => channelId == currentChannelId && (!chatVisible || !atBottom);
+
 enum TlsCertificateHealth { unknown, valid, expiring, expired }
 
 TlsCertificateHealth tlsCertificateHealth(
@@ -2612,7 +2630,9 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     if (!isActiveConnectionGeneration(activeGeneration)) return;
     await loadChannelMessages(channel: targetChannel);
     if (!isActiveConnectionGeneration(activeGeneration)) return;
-    setState(() => clearChannelUnread(targetChannel.id));
+    if (channelChatVisibleNow(targetChannel.id)) {
+      setState(() => clearChannelUnread(targetChannel.id));
+    }
     if (hasServerPermission('voice.join')) {
       await waitForCurrentUserOnline(server.id, generation: activeGeneration);
       if (!isActiveConnectionGeneration(activeGeneration)) return;
@@ -2643,7 +2663,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       setState(() {
         chatScope = ChatScope.channel;
         selectedDirectUserId = null;
-        clearChannelUnread(channel.id);
+        if (channelChatVisibleNow(channel.id)) clearChannelUnread(channel.id);
         messageController.clear();
       });
       WidgetsBinding.instance.addPostFrameCallback(
@@ -2685,9 +2705,10 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       }
       if (channelChanged || chatScope != ChatScope.channel) {
         setState(() {
+          if (shouldJoin) retainChannelUnreadOnly(channel.id);
           selectedChannel = channel;
           chatScope = ChatScope.channel;
-          clearChannelUnread(channel.id);
+          if (channelChatVisibleNow(channel.id)) clearChannelUnread(channel.id);
           messageController.clear();
           if (channelChanged) channelMessages.clear();
         });
@@ -3901,79 +3922,55 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     if (!hasServerPermission('channel.messages.view')) return;
     final channelId = event.channelId;
     if (channelId.isEmpty) return;
-    final viewingCurrentChannel =
-        chatScope == ChatScope.channel && selectedChannel?.id == channelId;
+    final chatVisible = channelChatVisibleNow(channelId);
+    final shouldUnread = channelMessageNeedsUnread(
+      channelId: channelId,
+      currentChannelId: channelMessageNotificationChannelId(),
+      chatVisible: chatVisible,
+      atBottom: messageViewAtBottom,
+    );
+    if (!shouldUnread) {
+      if (chatVisible) {
+        await loadChannelMessages(
+          channel: selectedChannel,
+          scrollToEnd: messageViewAtBottom,
+        );
+      }
+      return;
+    }
+
     final messageId = event.payload['message_id'] as String? ?? '';
-    if (!viewingCurrentChannel) {
-      final message = await fetchChannelMessageForEvent(channelId, messageId);
-      if (!mounted) return;
-      final becameVisible =
-          chatScope == ChatScope.channel && selectedChannel?.id == channelId;
-      if (becameVisible || message?.senderUserId == session?.user.id) {
-        return;
-      }
-      unawaited(
-        soundEffects.play(
-          SoundEffect.messageChannel,
-          cooldown: const Duration(seconds: 1),
-        ),
-      );
-      setState(() {
-        addChannelUnread(
-          channelId,
-          mention:
-              message != null && channelMessageMentionsCurrentUser(message),
-        );
-      });
-      return;
-    }
-
-    final wasAtBottom = messageViewAtBottom;
-    if (!wasAtBottom) {
-      final message = await fetchChannelMessageForEvent(channelId, messageId);
-      if (!mounted) return;
-      if (message?.senderUserId == session?.user.id) return;
-      unawaited(
-        soundEffects.play(
-          SoundEffect.messageChannel,
-          cooldown: const Duration(seconds: 1),
-        ),
-      );
-      setState(() {
-        showCurrentChatNewMessageHint();
-        addChannelUnread(
-          channelId,
-          mention:
-              message != null && channelMessageMentionsCurrentUser(message),
-        );
-      });
-      return;
-    }
-
-    await loadChannelMessages(channel: selectedChannel);
+    final message = await fetchChannelMessageForEvent(channelId, messageId);
     if (!mounted) return;
-    final message = messageId.isEmpty
-        ? channelMessages.lastOrNull
-        : channelMessages.where((item) => item.id == messageId).firstOrNull;
-    final mine = message?.senderUserId == session?.user.id;
-    if (mine) {
-      if (wasAtBottom) {
-        WidgetsBinding.instance.addPostFrameCallback(
-          (_) => scrollMessagesToEnd(),
+    final visibleNow = channelChatVisibleNow(channelId);
+    if (!channelMessageNeedsUnread(
+      channelId: channelId,
+      currentChannelId: channelMessageNotificationChannelId(),
+      chatVisible: visibleNow,
+      atBottom: messageViewAtBottom,
+    )) {
+      if (visibleNow) {
+        await loadChannelMessages(
+          channel: selectedChannel,
+          scrollToEnd: messageViewAtBottom,
         );
       }
       return;
     }
-    if (!wasAtBottom) {
-      setState(() {
-        showCurrentChatNewMessageHint();
-        addChannelUnread(
-          channelId,
-          mention:
-              message != null && channelMessageMentionsCurrentUser(message),
-        );
-      });
-    }
+    if (message?.senderUserId == session?.user.id) return;
+    unawaited(
+      soundEffects.play(
+        SoundEffect.messageChannel,
+        cooldown: const Duration(seconds: 1),
+      ),
+    );
+    setState(() {
+      if (visibleNow) showCurrentChatNewMessageHint();
+      addChannelUnread(
+        channelId,
+        mention: message != null && channelMessageMentionsCurrentUser(message),
+      );
+    });
   }
 
   Future<ChannelMessage?> fetchChannelMessageForEvent(
@@ -5985,6 +5982,18 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     if (removedUnread || removedMention) persistUnreadState();
   }
 
+  void retainChannelUnreadOnly(String channelId) {
+    final unreadLength = channelUnreadCounts.length;
+    final mentionLength = channelMentionCounts.length;
+    channelUnreadCounts.removeWhere((key, _) => key != channelId);
+    channelMentionCounts.removeWhere((key, _) => key != channelId);
+    if (chatScope == ChatScope.channel) clearCurrentChatNewMessageHint();
+    if (channelUnreadCounts.length != unreadLength ||
+        channelMentionCounts.length != mentionLength) {
+      persistUnreadState();
+    }
+  }
+
   void clearDirectUnread(String userId) {
     mergePendingDirectMessages(userId);
     directUnreadCounts.remove(userId);
@@ -6030,6 +6039,9 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
           session?.user.id != userId) {
         return;
       }
+      final currentChannelId = channelMessageNotificationChannelId();
+      counts.removeWhere((key, _) => key != currentChannelId);
+      mentions.removeWhere((key, _) => key != currentChannelId);
       setState(() {
         channelUnreadCounts
           ..clear()
@@ -6156,6 +6168,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       state.channels,
       state.currentUser.selectedChannelId,
     );
+    final previousCurrentChannelId = channelMessageNotificationChannelId();
     setState(() {
       channels = state.channels;
       presence = state.presence;
@@ -6165,6 +6178,10 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       myVoiceState = voiceStateForUser(state.presence, auth.user.id);
       selectedChannel =
           authoritativeChannel ?? retainedChannel ?? suggestedChannel;
+      if (authoritativeChannel != null &&
+          authoritativeChannel.id != previousCurrentChannelId) {
+        retainChannelUnreadOnly(authoritativeChannel.id);
+      }
     });
     updateVoiceMediaRouting();
   }
@@ -9241,7 +9258,10 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         chatScope != ChatScope.channel) {
       return;
     }
-    setState(() => mobileChatOpen = true);
+    setState(() {
+      mobileChatOpen = true;
+      clearChannelUnread(channel.id);
+    });
   }
 
   Widget buildMobileChannelList() {
@@ -9376,6 +9396,37 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     channels,
     voiceSession.currentChannelId ?? myVoiceState?.channelId,
     fallbackToFirst: false,
+  );
+
+  String? channelMessageNotificationChannelId() {
+    String? availableChannelId(String? channelId) =>
+        channelId != null && channels.any((channel) => channel.id == channelId)
+        ? channelId
+        : null;
+
+    final currentUserId = session?.user.id;
+    for (final user in presence.users) {
+      if (user.userId == currentUserId) {
+        final channelId = availableChannelId(user.currentChannelId);
+        if (channelId != null) return channelId;
+      }
+    }
+    final voiceChannelId = availableChannelId(
+      myVoiceState?.channelId ?? voiceSession.currentChannelId,
+    );
+    if (voiceChannelId != null) return voiceChannelId;
+    return selectedChannel?.id;
+  }
+
+  bool channelChatVisibleNow(String channelId) => channelChatIsVisible(
+    chatScope: chatScope,
+    selectedChannelId: selectedChannel?.id,
+    channelId: channelId,
+    mobileWeb: useMobileWebLayout(
+      isWeb: kIsWeb,
+      width: MediaQuery.sizeOf(context).width,
+    ),
+    mobileChatOpen: mobileChatOpen,
   );
 
   Widget buildMobileVoiceStatusBar() {

@@ -424,6 +424,78 @@ void main() {
     });
   });
 
+  test('channel unread requires the current channel to be unseen', () {
+    expect(
+      channelMessageNeedsUnread(
+        channelId: 'current',
+        currentChannelId: 'other',
+        chatVisible: false,
+        atBottom: false,
+      ),
+      isFalse,
+    );
+    expect(
+      channelMessageNeedsUnread(
+        channelId: 'current',
+        currentChannelId: 'current',
+        chatVisible: true,
+        atBottom: true,
+      ),
+      isFalse,
+    );
+    expect(
+      channelMessageNeedsUnread(
+        channelId: 'current',
+        currentChannelId: 'current',
+        chatVisible: true,
+        atBottom: false,
+      ),
+      isTrue,
+    );
+    expect(
+      channelMessageNeedsUnread(
+        channelId: 'current',
+        currentChannelId: 'current',
+        chatVisible: false,
+        atBottom: true,
+      ),
+      isTrue,
+    );
+  });
+
+  test('mobile channel list does not count as visible channel chat', () {
+    expect(
+      channelChatIsVisible(
+        chatScope: ChatScope.channel,
+        selectedChannelId: 'current',
+        channelId: 'current',
+        mobileWeb: false,
+        mobileChatOpen: false,
+      ),
+      isTrue,
+    );
+    expect(
+      channelChatIsVisible(
+        chatScope: ChatScope.channel,
+        selectedChannelId: 'current',
+        channelId: 'current',
+        mobileWeb: true,
+        mobileChatOpen: false,
+      ),
+      isFalse,
+    );
+    expect(
+      channelChatIsVisible(
+        chatScope: ChatScope.channel,
+        selectedChannelId: 'current',
+        channelId: 'current',
+        mobileWeb: true,
+        mobileChatOpen: true,
+      ),
+      isTrue,
+    );
+  });
+
   testWidgets('upload queue shows every queued file', (tester) async {
     final tasks = [
       TransferTask.upload(
