@@ -6425,7 +6425,8 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     );
   }
 
-  Future<void> showClientSettings() async {
+  Future<void> showClientSettings({String? onlyPage}) async {
+    assert(onlyPage == null || onlyPage == 'profile' || onlyPage == 'audio');
     await audioDeviceMonitor.refresh();
     if (!mounted) return;
     final profileController = TextEditingController(text: localDisplayName);
@@ -6436,7 +6437,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     var nextMicrophoneThreshold = microphoneThreshold;
     var nextPushToTalkHotkey = microphonePushToTalkHotkey;
     var nextSoundEffectVolume = soundEffectVolume;
-    var selectedPage = 'profile';
+    var selectedPage = onlyPage ?? 'profile';
     try {
       final action = await showDialog<String>(
         context: context,
@@ -6450,6 +6451,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
             compactHeader: true,
             maxWidth: 920,
             child: OsSplitSettingsBody(
+              showNavigation: onlyPage == null,
               navigation: [
                 OsSettingsNavEntry(
                   icon: Icons.account_circle_outlined,
@@ -6475,6 +6477,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                   initialSoundEffectVolume: soundEffectVolume,
                   microphoneInputLevel: voiceSession.microphoneInputLevel,
                   captureCoordinator: voiceSession,
+                  devicesOnly: onlyPage == 'audio',
                   onSoundEffectPreview: (volume) => unawaited(
                     soundEffects.play(
                       SoundEffect.messageDirect,
@@ -9831,6 +9834,13 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                       ],
                     ),
                   ),
+                  const SizedBox(width: 8),
+                  OsSecondaryButton(
+                    key: const ValueKey('mobile-edit-nickname'),
+                    label: '修改昵称',
+                    onPressed: () =>
+                        unawaited(showClientSettings(onlyPage: 'profile')),
+                  ),
                 ],
               ),
             ),
@@ -9868,9 +9878,9 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                   onTap: () => refreshAfter(toggleScreenShare()),
                 ),
                 MobileVoiceActionCard(
-                  label: '设置',
-                  icon: Icons.settings,
-                  onTap: () => unawaited(showClientSettings()),
+                  label: '音频设备',
+                  icon: Icons.headphones_rounded,
+                  onTap: () => unawaited(showClientSettings(onlyPage: 'audio')),
                 ),
                 MobileVoiceActionCard(
                   label: '连接信息',
@@ -11474,10 +11484,12 @@ class OsSplitSettingsBody extends StatelessWidget {
     super.key,
     required this.navigation,
     required this.content,
+    this.showNavigation = true,
   });
 
   final List<Widget> navigation;
   final Widget content;
+  final bool showNavigation;
 
   @override
   Widget build(BuildContext context) {
@@ -11485,6 +11497,7 @@ class OsSplitSettingsBody extends StatelessWidget {
       height: 370,
       child: LayoutBuilder(
         builder: (context, constraints) {
+          if (!showNavigation) return content;
           if (constraints.maxWidth < 560) {
             return Column(
               children: [
@@ -11741,6 +11754,7 @@ class OsClientAudioSettingsPane extends StatefulWidget {
     required this.onSave,
     required this.onSoundEffectPreview,
     this.captureCoordinator,
+    this.devicesOnly = false,
   });
 
   final AudioDeviceMonitor deviceMonitor;
@@ -11752,6 +11766,7 @@ class OsClientAudioSettingsPane extends StatefulWidget {
   final double initialSoundEffectVolume;
   final ValueListenable<double> microphoneInputLevel;
   final VoiceSessionController? captureCoordinator;
+  final bool devicesOnly;
   final void Function(
     String? inputDeviceId,
     String? outputDeviceId,
@@ -11799,7 +11814,8 @@ class _OsClientAudioSettingsPaneState extends State<OsClientAudioSettingsPane> {
       this,
       _releaseMicrophonePreview,
     );
-    if (activationMode == MicrophoneActivationMode.voiceThreshold) {
+    if (!widget.devicesOnly &&
+        activationMode == MicrophoneActivationMode.voiceThreshold) {
       unawaited(_startMicrophonePreview());
     }
   }
@@ -11983,13 +11999,15 @@ class _OsClientAudioSettingsPaneState extends State<OsClientAudioSettingsPane> {
                       : defaultInputLabel,
                   onChanged: (value) {
                     setState(() => inputValue = value ?? '');
-                    if (activationMode ==
-                        MicrophoneActivationMode.voiceThreshold) {
+                    if (!widget.devicesOnly &&
+                        activationMode ==
+                            MicrophoneActivationMode.voiceThreshold) {
                       unawaited(_startMicrophonePreview());
                     }
                   },
                 ),
-                if (inputs.isNotEmpty || currentDefaultInput != null) ...[
+                if (!widget.devicesOnly &&
+                    (inputs.isNotEmpty || currentDefaultInput != null)) ...[
                   const SizedBox(height: 12),
                   MicrophoneActivationCard(
                     mode: activationMode,
@@ -12029,39 +12047,41 @@ class _OsClientAudioSettingsPaneState extends State<OsClientAudioSettingsPane> {
               },
             ),
           ),
-          const SizedBox(height: 12),
-          OsFormCard(
-            icon: Icons.music_note_rounded,
-            title: '音效',
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    const Expanded(child: OsFieldLabel('音效音量')),
-                    Text(
-                      '${(soundEffectVolume * 100).round()}%',
-                      key: const ValueKey('sound-effect-volume-percent'),
-                      style: const TextStyle(
-                        color: OsColors.text,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w800,
-                        fontFeatures: [ui.FontFeature.tabularFigures()],
+          if (!widget.devicesOnly) ...[
+            const SizedBox(height: 12),
+            OsFormCard(
+              icon: Icons.music_note_rounded,
+              title: '音效',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      const Expanded(child: OsFieldLabel('音效音量')),
+                      Text(
+                        '${(soundEffectVolume * 100).round()}%',
+                        key: const ValueKey('sound-effect-volume-percent'),
+                        style: const TextStyle(
+                          color: OsColors.text,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                          fontFeatures: [ui.FontFeature.tabularFigures()],
+                        ),
                       ),
-                    ),
-                  ],
-                ),
-                Slider(
-                  key: const ValueKey('sound-effect-volume-slider'),
-                  value: soundEffectVolume,
-                  divisions: 100,
-                  onChanged: (value) =>
-                      setState(() => soundEffectVolume = value),
-                  onChangeEnd: widget.onSoundEffectPreview,
-                ),
-              ],
+                    ],
+                  ),
+                  Slider(
+                    key: const ValueKey('sound-effect-volume-slider'),
+                    value: soundEffectVolume,
+                    divisions: 100,
+                    onChanged: (value) =>
+                        setState(() => soundEffectVolume = value),
+                    onChangeEnd: widget.onSoundEffectPreview,
+                  ),
+                ],
+              ),
             ),
-          ),
+          ],
         ],
       ),
     );

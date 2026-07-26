@@ -2276,6 +2276,61 @@ void main() {
     monitor.dispose();
   });
 
+  testWidgets('mobile audio settings only show device selectors', (
+    WidgetTester tester,
+  ) async {
+    final monitor = AudioDeviceMonitor(
+      enumerateDevices: () async => [
+        rtc.MediaDeviceInfo(
+          deviceId: 'built-in-input',
+          label: '内置麦克风',
+          kind: 'audioinput',
+        ),
+        rtc.MediaDeviceInfo(
+          deviceId: 'built-in-output',
+          label: '内置扬声器',
+          kind: 'audiooutput',
+        ),
+      ],
+      registerDeviceChangeListener: (_) {},
+    );
+    await monitor.start();
+    final level = ValueNotifier(0.0);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: OsSplitSettingsBody(
+            showNavigation: false,
+            navigation: const [Text('不应显示的导航')],
+            content: OsClientAudioSettingsPane(
+              deviceMonitor: monitor,
+              initialInputDeviceId: null,
+              initialOutputDeviceId: null,
+              initialActivationMode: MicrophoneActivationMode.continuous,
+              initialThreshold: 0.4,
+              initialPushToTalkHotkey: null,
+              initialSoundEffectVolume: 1,
+              microphoneInputLevel: level,
+              devicesOnly: true,
+              onSoundEffectPreview: (_) {},
+              onSave: (_, _, _, _, _, _) {},
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('不应显示的导航'), findsNothing);
+    expect(find.text('输入设备'), findsOneWidget);
+    expect(find.text('输出设备'), findsOneWidget);
+    expect(find.text('麦克风激活方式'), findsNothing);
+    expect(find.text('音效'), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    level.dispose();
+    monitor.dispose();
+  });
+
   test('offline avatar changes force the next server sync', () {
     expect(
       shouldUploadLocalAvatar(
