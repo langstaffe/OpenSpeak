@@ -3,6 +3,8 @@ import 'dart:typed_data';
 
 bool browserSupportsWebRtc() => true;
 
+bool browserSupportsScreenShare() => true;
+
 typedef BrowserAudioRangeReader =
     Future<Uint8List> Function(int start, int endInclusive);
 

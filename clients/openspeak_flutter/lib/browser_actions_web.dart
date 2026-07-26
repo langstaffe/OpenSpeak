@@ -5,15 +5,22 @@
 import 'dart:async';
 import 'dart:html' as html;
 import 'dart:js_interop';
+import 'dart:js_interop_unsafe';
 import 'dart:typed_data';
 
 @JS('RTCPeerConnection')
 external JSFunction? get _rtcPeerConnection;
 
+@JS('navigator.mediaDevices')
+external JSObject? get _mediaDevices;
+
 @JS('openSpeakAudioStreamWorkerReady')
 external bool? get _audioStreamWorkerReady;
 
 bool browserSupportsWebRtc() => _rtcPeerConnection != null;
+
+bool browserSupportsScreenShare() =>
+    _mediaDevices?['getDisplayMedia']?.isA<JSFunction>() == true;
 
 typedef BrowserAudioRangeReader =
     Future<Uint8List> Function(int start, int endInclusive);

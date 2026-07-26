@@ -66,6 +66,7 @@ const defaultServerUrl = String.fromEnvironment(
   defaultValue: 'http://127.0.0.1:27410',
 );
 const mobileWebBreakpoint = 720.0;
+const unsupportedBrowserScreenShareMessage = '当前手机浏览器不支持屏幕共享';
 
 bool useMobileWebLayout({required bool isWeb, required double width}) =>
     isWeb && width < mobileWebBreakpoint;
@@ -9051,6 +9052,15 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
 
   Future<void> toggleScreenShare() async {
     if (screenShareActionInFlight) return;
+    if (!voiceSession.isScreenSharing &&
+        kIsWeb &&
+        !browserSupportsScreenShare()) {
+      setState(() => error = unsupportedBrowserScreenShareMessage);
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(content: Text(unsupportedBrowserScreenShareMessage)),
+      );
+      return;
+    }
     setState(() => screenShareActionInFlight = true);
     try {
       if (voiceSession.isScreenSharing) {
@@ -9082,12 +9092,18 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         );
         if (!mounted || source == null) return;
       }
-      await runGuarded(
-        () => voiceSession.startScreenShare(
-          sourceId: source?.id ?? '',
-          quality: quality,
-        ),
-      );
+      await runGuarded(() async {
+        try {
+          await voiceSession.startScreenShare(
+            sourceId: source?.id ?? '',
+            quality: quality,
+          );
+        } catch (exception, stackTrace) {
+          if (exception is OpenSpeakException) rethrow;
+          ClientLog.error('voice.screen.start', exception, stackTrace);
+          throw OpenSpeakException('屏幕共享失败');
+        }
+      });
     } finally {
       if (mounted) setState(() => screenShareActionInFlight = false);
     }
@@ -9615,6 +9631,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     final canSpeak =
         hasServerPermission('voice.speak') && !microphoneUnavailable;
     final canShareScreen =
+        (!kIsWeb || browserSupportsScreenShare()) &&
         hasServerPermission('voice.screen_share') &&
         snapshot.connected &&
         snapshot.voiceToken?.canShareScreen == true;
@@ -9889,6 +9906,18 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                 ),
               ],
             ),
+            if (kIsWeb && !browserSupportsScreenShare()) ...[
+              const SizedBox(height: 10),
+              const Text(
+                unsupportedBrowserScreenShareMessage,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: OsColors.dim,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
           ],
         ],
       ),
@@ -10063,9 +10092,14 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                   hasServerPermission('voice.speak') &&
                   (!kIsWeb || !microphoneUnavailable),
               canShareScreen:
+                  (!kIsWeb || browserSupportsScreenShare()) &&
                   hasServerPermission('voice.screen_share') &&
                   voiceSession.snapshot.connected &&
                   voiceSession.snapshot.voiceToken?.canShareScreen == true,
+              screenShareUnavailableReason:
+                  kIsWeb && !browserSupportsScreenShare()
+                  ? unsupportedBrowserScreenShareMessage
+                  : null,
               screenSharing: voiceSession.isScreenSharing,
               screenShareBusy: screenShareActionInFlight,
               listenOff: voiceSession.snapshot.listenOff,
@@ -19205,6 +19239,7 @@ class CurrentUserBar extends StatefulWidget {
     this.canShareScreen = false,
     this.screenSharing = false,
     this.screenShareBusy = false,
+    this.screenShareUnavailableReason,
     required this.listenOff,
     this.noiseSuppressionEnabled = true,
     required this.inputVolume,
@@ -19234,6 +19269,7 @@ class CurrentUserBar extends StatefulWidget {
   final bool canShareScreen;
   final bool screenSharing;
   final bool screenShareBusy;
+  final String? screenShareUnavailableReason;
   final bool listenOff;
   final bool noiseSuppressionEnabled;
   final double inputVolume;
@@ -19513,9 +19549,10 @@ class _CurrentUserBarState extends State<CurrentUserBar> {
                           ? '停止分享屏幕'
                           : widget.screenShareBusy
                           ? '正在切换屏幕共享'
-                          : widget.canShareScreen
-                          ? '分享屏幕'
-                          : '请先进入语音频道或检查屏幕共享权限',
+                          : widget.screenShareUnavailableReason ??
+                                (widget.canShareScreen
+                                    ? '分享屏幕'
+                                    : '请先进入语音频道或检查屏幕共享权限'),
                       icon: widget.screenSharing
                           ? Icons.stop_screen_share_rounded
                           : Icons.screen_share,

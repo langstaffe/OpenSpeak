@@ -123,14 +123,14 @@ lk.VideoPublishOptions screenShareVideoPublishOptions(
   TargetPlatform platform, {
   bool isWeb = kIsWeb,
 }) {
-  if (!isWeb &&
-      (platform == TargetPlatform.macOS ||
-          platform == TargetPlatform.windows)) {
+  if (isWeb ||
+      platform == TargetPlatform.macOS ||
+      platform == TargetPlatform.windows) {
     return lk.VideoPublishOptions(
       videoCodec: 'h264',
       screenShareEncoding: encoding,
       simulcast: false,
-      degradationPreference: platform == TargetPlatform.macOS
+      degradationPreference: !isWeb && platform == TargetPlatform.macOS
           ? lk.DegradationPreference.maintainFramerate
           : null,
       backupVideoCodec: const lk.BackupVideoCodec(enabled: false),
@@ -141,6 +141,10 @@ lk.VideoPublishOptions screenShareVideoPublishOptions(
     simulcast: false,
   );
 }
+
+bool supportsH264VideoEncoding(Iterable<rtc.RTCRtpCodecCapability>? codecs) =>
+    codecs?.any((codec) => codec.mimeType.toLowerCase() == 'video/h264') ==
+    true;
 
 double? rtpBitrateBitsPerSecond({
   required num? bytes,
@@ -986,6 +990,19 @@ class VoiceSessionController extends ChangeNotifier {
     if (_remoteScreenSharingUserId != null) {
       throw OpenSpeakException('当前频道有人正在分享屏幕');
     }
+    if (kIsWeb) {
+      try {
+        final capabilities = await rtc.getRtpSenderCapabilities('video');
+        if (!supportsH264VideoEncoding(capabilities.codecs)) {
+          throw OpenSpeakException('屏幕共享失败：当前浏览器不支持 H.264 编码');
+        }
+      } on OpenSpeakException {
+        rethrow;
+      } catch (error, stackTrace) {
+        ClientLog.error('voice.screen.h264_capability', error, stackTrace);
+        throw OpenSpeakException('屏幕共享失败：无法确认浏览器的 H.264 编码能力');
+      }
+    }
     final sessionGeneration = _sessionGeneration;
     final token = await api.getScreenShareToken(
       authToken,
@@ -1065,11 +1082,15 @@ class VoiceSessionController extends ChangeNotifier {
         track,
         publishOptions: publishOptions,
       );
+      final publishedMimeType = publication.mimeType.trim().toLowerCase();
       if (publishOptions.videoCodec == 'h264' &&
-          track.codec?.toLowerCase() != 'h264') {
+          publishedMimeType.isNotEmpty &&
+          publishedMimeType != 'video/h264') {
         await participant.removePublishedTrack(publication.sid);
         throw OpenSpeakException(
-          defaultTargetPlatform == TargetPlatform.macOS
+          kIsWeb
+              ? '屏幕共享失败：当前浏览器无法使用 H.264 编码'
+              : defaultTargetPlatform == TargetPlatform.macOS
               ? 'macOS 屏幕共享只允许使用硬件 H.264'
               : 'Windows 屏幕共享只允许使用 H.264',
         );
@@ -1396,7 +1417,9 @@ class VoiceSessionController extends ChangeNotifier {
                 'packet_loss_pct=${loss?.toStringAsFixed(2) ?? 'unknown'} '
                 'rtt_ms=${sample.roundTripTime == null ? 'unknown' : (sample.roundTripTime! * 1000).toStringAsFixed(1)} '
                 'quality_limit=${sample.qualityLimitationReason ?? 'unknown'} '
-                'encoder=${sample.encoderImplementation ?? 'unknown'}',
+                'encoder=${sample.encoderImplementation ?? 'unknown'} '
+                'power_efficient_encoder='
+                '${outboundValues?['powerEfficientEncoder'] ?? 'unknown'}',
           );
           _screenStatsFailureLogged = false;
           return;

@@ -25,6 +25,7 @@ import 'package:openspeak_flutter/voice_session_controller.dart';
 void main() {
   test('browser WebRTC probe accepts a supported environment', () {
     expect(browserSupportsWebRtc(), isTrue);
+    expect(browserSupportsScreenShare(), isTrue);
   });
 
   test('mobile layout applies only to Web widths below 720', () {
@@ -3105,6 +3106,46 @@ void main() {
     expect(tapped, isFalse);
   });
 
+  testWidgets('unsupported browser screen share explains why it is disabled', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: CurrentUserBar(
+            connected: true,
+            displayName: 'Admin',
+            online: true,
+            muted: false,
+            canShareScreen: false,
+            screenShareUnavailableReason: unsupportedBrowserScreenShareMessage,
+            listenOff: false,
+            inputVolume: 1,
+            outputVolume: 1,
+            onMute: () {},
+            onListenOff: () {},
+            onInputVolumeChanged: (_) {},
+            onOutputVolumeChanged: (_) {},
+            onScreenShare: () {},
+            onSettings: () {},
+          ),
+        ),
+      ),
+    );
+
+    expect(
+      find.byTooltip(unsupportedBrowserScreenShareMessage),
+      findsOneWidget,
+    );
+    final button = tester.widget<IconButton>(
+      find.ancestor(
+        of: find.byIcon(Icons.screen_share),
+        matching: find.byType(IconButton),
+      ),
+    );
+    expect(button.onPressed, isNull);
+  });
+
   testWidgets('application button themes use hand cursors when enabled', (
     WidgetTester tester,
   ) async {
@@ -4060,7 +4101,7 @@ void main() {
     expect(partial.bitrateMbps('1080p', 60), 16);
   });
 
-  test('native desktop screen sharing requires only H264', () {
+  test('desktop and Web screen sharing require only H264', () {
     final encoding = screenShareVideoParameters(
       const ScreenShareQuality('1080p', 60),
     ).encoding;
@@ -4090,8 +4131,26 @@ void main() {
     expect(windows.videoCodec, 'h264');
     expect(windows.backupVideoCodec.enabled, isFalse);
     expect(windows.degradationPreference, isNull);
-    expect(web.videoCodec, 'vp8');
+    expect(web.videoCodec, 'h264');
+    expect(web.backupVideoCodec.enabled, isFalse);
     expect(web.degradationPreference, isNull);
+  });
+
+  test('screen sharing recognizes only H264 video sender capabilities', () {
+    expect(
+      supportsH264VideoEncoding([
+        rtc.RTCRtpCodecCapability(clockRate: 90000, mimeType: 'video/VP8'),
+        rtc.RTCRtpCodecCapability(clockRate: 90000, mimeType: 'video/H264'),
+      ]),
+      isTrue,
+    );
+    expect(
+      supportsH264VideoEncoding([
+        rtc.RTCRtpCodecCapability(clockRate: 90000, mimeType: 'video/VP8'),
+      ]),
+      isFalse,
+    );
+    expect(supportsH264VideoEncoding(null), isFalse);
   });
 
   test('screen share diagnostics calculate native and web RTP bitrate', () {
