@@ -9200,10 +9200,10 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
           color: OsColors.content,
           child: Column(
             children: [
-              Expanded(child: body),
+              Expanded(child: RepaintBoundary(child: body)),
               if (!mobileChatOpen) ...[
-                buildMobileVoiceStatusBar(),
-                buildMobileNavigationBar(),
+                RepaintBoundary(child: buildMobileVoiceStatusBar()),
+                RepaintBoundary(child: buildMobileNavigationBar()),
               ],
             ],
           ),

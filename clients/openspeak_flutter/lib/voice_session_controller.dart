@@ -626,6 +626,18 @@ Set<String> withLocalSpeakingState(
   return next;
 }
 
+bool voiceRoomSnapshotChanged(
+  VoiceSessionSnapshot snapshot, {
+  required int remoteParticipants,
+  required int remoteAudioTracks,
+  required Set<String> participantUserIds,
+  required Set<String> speakingUserIds,
+}) =>
+    snapshot.remoteParticipants != remoteParticipants ||
+    snapshot.remoteAudioTracks != remoteAudioTracks ||
+    !setEquals(snapshot.liveKitParticipantUserIds, participantUserIds) ||
+    !setEquals(snapshot.liveKitSpeakingUserIds, speakingUserIds);
+
 class VoiceSessionSnapshot {
   const VoiceSessionSnapshot({
     required this.connecting,
@@ -3003,14 +3015,22 @@ class VoiceSessionController extends ChangeNotifier {
     final currentChannelRemoteParticipants = _currentChannelRemoteParticipants(
       room,
     );
-    _setSnapshot(
-      snapshot.copyWith(
-        remoteParticipants: currentChannelRemoteParticipants.length,
-        remoteAudioTracks: remoteAudioTracks,
-        liveKitParticipantUserIds: participantUserIds,
-        liveKitSpeakingUserIds: speakingUserIds,
-      ),
-    );
+    if (voiceRoomSnapshotChanged(
+      snapshot,
+      remoteParticipants: currentChannelRemoteParticipants.length,
+      remoteAudioTracks: remoteAudioTracks,
+      participantUserIds: participantUserIds,
+      speakingUserIds: speakingUserIds,
+    )) {
+      _setSnapshot(
+        snapshot.copyWith(
+          remoteParticipants: currentChannelRemoteParticipants.length,
+          remoteAudioTracks: remoteAudioTracks,
+          liveKitParticipantUserIds: participantUserIds,
+          liveKitSpeakingUserIds: speakingUserIds,
+        ),
+      );
+    }
     if (_microphoneMonitorTrack == null) {
       _setLocalSpeaking(room.localParticipant?.isSpeaking == true);
     }

@@ -3940,6 +3940,36 @@ void main() {
     expect(latencyReset.latencyJitterMs, isNull);
   });
 
+  test('unchanged LiveKit room state does not refresh the voice snapshot', () {
+    final snapshot = VoiceSessionSnapshot.initial().copyWith(
+      remoteParticipants: 1,
+      remoteAudioTracks: 1,
+      liveKitParticipantUserIds: {'local', 'remote'},
+      liveKitSpeakingUserIds: {'remote'},
+    );
+
+    expect(
+      voiceRoomSnapshotChanged(
+        snapshot,
+        remoteParticipants: 1,
+        remoteAudioTracks: 1,
+        participantUserIds: {'remote', 'local'},
+        speakingUserIds: {'remote'},
+      ),
+      isFalse,
+    );
+    expect(
+      voiceRoomSnapshotChanged(
+        snapshot,
+        remoteParticipants: 1,
+        remoteAudioTracks: 1,
+        participantUserIds: {'remote', 'local'},
+        speakingUserIds: const {},
+      ),
+      isTrue,
+    );
+  });
+
   test('ignores retired plaintext network probe fields', () {
     final token = VoiceToken.fromJson({
       'url': 'ws://voice.example.com:27420',
