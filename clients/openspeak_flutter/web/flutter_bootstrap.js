@@ -4,7 +4,18 @@
 // The server-side Web switch and custom path must take effect immediately.
 // Do not install Flutter's offline app-shell service worker, which could keep
 // serving a disabled or moved entry point from the browser cache.
-window.addEventListener('flutter-first-frame', () => document.getElementById('loading')?.remove(), {once: true});
+const removeLoading = () => document.getElementById('loading')?.remove();
+const loadingObserver = new MutationObserver(() => {
+  if (document.querySelector('flutter-view')) {
+    loadingObserver.disconnect();
+    removeLoading();
+  }
+});
+loadingObserver.observe(document.body, {childList: true});
+window.addEventListener('flutter-first-frame', () => {
+  loadingObserver.disconnect();
+  removeLoading();
+}, {once: true});
 window.openSpeakAudioStreamWorkerReady = false;
 
 async function registerAudioStreamWorker() {
