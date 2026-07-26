@@ -1998,13 +1998,13 @@ func (s *Server) handleChannels(w http.ResponseWriter, r *http.Request, authCtx 
 		writeJSON(w, http.StatusOK, response)
 	case "images":
 		if r.Method == http.MethodPost {
-			s.handleChannelImageUpload(w, r, authCtx, channelID)
+			s.handleChannelAttachmentUpload(w, r, authCtx, channelID, "image")
 			return
 		}
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
 	case "files":
 		if r.Method == http.MethodPost {
-			s.handleChannelFileUpload(w, r, authCtx, channelID)
+			s.handleChannelAttachmentUpload(w, r, authCtx, channelID, "file")
 			return
 		}
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
@@ -2499,15 +2499,23 @@ func (s *Server) handleChannelMessages(w http.ResponseWriter, r *http.Request, a
 	}
 }
 
-func (s *Server) handleChannelImageUpload(w http.ResponseWriter, r *http.Request, authCtx authContext, channelID string) {
+func (s *Server) handleChannelAttachmentUpload(w http.ResponseWriter, r *http.Request, authCtx authContext, channelID, kind string) {
 	if !s.requireChannelAccess(w, r, authCtx, channelID) {
 		return
 	}
-	if !s.requireChannelServerPermission(w, r, authCtx, channelID, store.PermissionChannelMessagesSendImage) {
+	permission := store.PermissionChannelMessagesSendFile
+	maxSize := int64(maxLocalAttachmentFileSize)
+	maxMemory := int64(256 << 20)
+	if kind == "image" {
+		permission = store.PermissionChannelMessagesSendImage
+		maxSize = maxAttachmentImageSize
+		maxMemory = (128 << 20) + (1 << 20)
+	}
+	if !s.requireChannelServerPermission(w, r, authCtx, channelID, permission) {
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxAttachmentImageSize+(1<<20))
-	if err := r.ParseMultipartForm((128 << 20) + (1 << 20)); err != nil {
+	r.Body = http.MaxBytesReader(w, r.Body, maxSize+(1<<20))
+	if err := r.ParseMultipartForm(maxMemory); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_multipart", "invalid multipart form")
 		return
 	}
@@ -2529,25 +2537,23 @@ func (s *Server) handleChannelImageUpload(w http.ResponseWriter, r *http.Request
 	if !requireClientEncryptionMode(w, r.FormValue("encryption_mode"), server.EncryptionMode) {
 		return
 	}
-	epochID := r.FormValue("epoch_id")
-	nonce := r.FormValue("nonce")
-	epoch, normalizedNonce, ok := normalizeChannelEncryption(w, server.EncryptionMode, optionalString(epochID), nonce)
+	epoch, nonce, ok := normalizeChannelEncryption(w, server.EncryptionMode, optionalString(r.FormValue("epoch_id")), r.FormValue("nonce"))
 	if !ok {
 		return
 	}
-	fileHandle, header, err := r.FormFile("image")
+	fileHandle, header, err := r.FormFile(kind)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "missing_image", "image is required")
+		writeError(w, http.StatusBadRequest, "missing_"+kind, kind+" is required")
 		return
 	}
 	_ = fileHandle.Close()
 	plaintextSize, _ := strconv.ParseInt(strings.TrimSpace(r.FormValue("plaintext_size_bytes")), 10, 64)
 	chunkSize, _ := strconv.ParseInt(strings.TrimSpace(r.FormValue("chunk_size")), 10, 64)
 	format := strings.TrimSpace(r.FormValue("attachment_format"))
-	if !validateAttachmentEncryption(w, server.EncryptionMode, normalizedNonce, header.Size, plaintextSize, format, chunkSize, maxAttachmentImageSize) {
+	if !validateAttachmentEncryption(w, server.EncryptionMode, nonce, header.Size, plaintextSize, format, chunkSize, maxSize) {
 		return
 	}
-	result, err := files.SaveMultipart(server.FileRoot, serverID, "channel-images", header, r.FormValue("original_name"))
+	result, err := files.SaveMultipart(server.FileRoot, serverID, "channel-"+kind+"s", header, r.FormValue("original_name"))
 	if err != nil {
 		writeResult(w, nil, err)
 		return
@@ -2556,102 +2562,7 @@ func (s *Server) handleChannelImageUpload(w http.ResponseWriter, r *http.Request
 		ServerID:       serverID,
 		ChannelID:      &channelID,
 		UploaderUserID: authCtx.User.ID,
-		Kind:           "channel_image",
-		OriginalName:   result.OriginalName,
-		ContentType:    result.ContentType,
-		SizeBytes:      result.SizeBytes,
-		SHA256Hex:      result.SHA256Hex,
-		RelativePath:   result.RelativePath,
-		EncryptionMode: server.EncryptionMode,
-		Metadata:       attachmentEncryptionMetadata(server.EncryptionMode, normalizedNonce, plaintextSize, format, chunkSize),
-	})
-	if err != nil {
-		_ = os.Remove(filepath.Join(server.FileRoot, filepath.FromSlash(result.RelativePath)))
-		writeResult(w, nil, err)
-		return
-	}
-	msg, err := s.repo.StoreChannelMessage(r.Context(), store.ChannelMessage{
-		ChannelID:      channelID,
-		SenderUserID:   authCtx.User.ID,
-		Kind:           "image",
-		EncryptionMode: server.EncryptionMode,
-		EpochID:        epoch,
-		Body:           file.ID,
-		Nonce:          normalizedNonce,
-		Metadata:       channelAttachmentMessageMetadata(file, plaintextSize, format, chunkSize),
-	})
-	if err != nil {
-		_ = s.CleanupRetainedFile(context.Background(), file)
-		if errors.Is(err, store.ErrEncryptionMode) {
-			writeError(w, http.StatusConflict, "encryption_mode_changed", "server encryption mode changed; retry the upload")
-			return
-		}
-		if errors.Is(err, store.ErrEpochConflict) {
-			writeError(w, http.StatusConflict, "epoch_changed", "channel encryption epoch changed; refresh keys and retry")
-			return
-		}
-	}
-	if err == nil {
-		s.hub.Publish(realtime.Event{Type: "channel.message_created", ServerID: serverID, ChannelID: channelID, Payload: map[string]any{"message_id": msg.ID, "kind": "image"}})
-	}
-	writeResult(w, map[string]any{"file": file, "message": msg}, err)
-}
-
-func (s *Server) handleChannelFileUpload(w http.ResponseWriter, r *http.Request, authCtx authContext, channelID string) {
-	if !s.requireChannelAccess(w, r, authCtx, channelID) {
-		return
-	}
-	if !s.requireChannelServerPermission(w, r, authCtx, channelID, store.PermissionChannelMessagesSendFile) {
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxLocalAttachmentFileSize+(1<<20))
-	if err := r.ParseMultipartForm(256 << 20); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_multipart", "invalid multipart form")
-		return
-	}
-	channel, err := s.repo.GetChannel(r.Context(), channelID)
-	if err != nil {
-		writeResult(w, nil, err)
-		return
-	}
-	if requestedServerID := r.FormValue("server_id"); requestedServerID != "" && requestedServerID != channel.ServerID {
-		writeError(w, http.StatusBadRequest, "channel_server_mismatch", "channel does not belong to server")
-		return
-	}
-	server, err := s.repo.GetServer(r.Context(), channel.ServerID)
-	if err != nil {
-		writeResult(w, nil, err)
-		return
-	}
-	if !requireClientEncryptionMode(w, r.FormValue("encryption_mode"), server.EncryptionMode) {
-		return
-	}
-	epoch, nonce, ok := normalizeChannelEncryption(w, server.EncryptionMode, optionalString(r.FormValue("epoch_id")), r.FormValue("nonce"))
-	if !ok {
-		return
-	}
-	fileHandle, header, err := r.FormFile("file")
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "missing_file", "file is required")
-		return
-	}
-	_ = fileHandle.Close()
-	plaintextSize, _ := strconv.ParseInt(strings.TrimSpace(r.FormValue("plaintext_size_bytes")), 10, 64)
-	chunkSize, _ := strconv.ParseInt(strings.TrimSpace(r.FormValue("chunk_size")), 10, 64)
-	format := strings.TrimSpace(r.FormValue("attachment_format"))
-	if !validateAttachmentEncryption(w, server.EncryptionMode, nonce, header.Size, plaintextSize, format, chunkSize, maxLocalAttachmentFileSize) {
-		return
-	}
-	result, err := files.SaveMultipart(server.FileRoot, channel.ServerID, "channel-files", header, r.FormValue("original_name"))
-	if err != nil {
-		writeResult(w, nil, err)
-		return
-	}
-	file, err := s.repo.StoreFile(r.Context(), store.StoredFile{
-		ServerID:       channel.ServerID,
-		ChannelID:      &channelID,
-		UploaderUserID: authCtx.User.ID,
-		Kind:           "channel_file",
+		Kind:           "channel_" + kind,
 		OriginalName:   result.OriginalName,
 		ContentType:    result.ContentType,
 		SizeBytes:      result.SizeBytes,
@@ -2668,7 +2579,7 @@ func (s *Server) handleChannelFileUpload(w http.ResponseWriter, r *http.Request,
 	msg, err := s.repo.StoreChannelMessage(r.Context(), store.ChannelMessage{
 		ChannelID:      channelID,
 		SenderUserID:   authCtx.User.ID,
-		Kind:           "file",
+		Kind:           kind,
 		EncryptionMode: server.EncryptionMode,
 		EpochID:        epoch,
 		Body:           file.ID,
@@ -2687,7 +2598,7 @@ func (s *Server) handleChannelFileUpload(w http.ResponseWriter, r *http.Request,
 		}
 	}
 	if err == nil {
-		s.hub.Publish(realtime.Event{Type: "channel.message_created", ServerID: channel.ServerID, ChannelID: channelID, Payload: map[string]any{"message_id": msg.ID, "kind": "file"}})
+		s.hub.Publish(realtime.Event{Type: "channel.message_created", ServerID: serverID, ChannelID: channelID, Payload: map[string]any{"message_id": msg.ID, "kind": kind}})
 	}
 	writeResult(w, map[string]any{"file": file, "message": msg}, err)
 }

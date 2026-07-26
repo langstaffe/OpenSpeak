@@ -708,12 +708,22 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
-  if (message == WM_CLOSE &&
-      MessageBoxW(hwnd,
-                  L"\u786E\u5B9A\u8981\u5173\u95ED OpenSpeak \u5417\uFF1F",
-                  L"\u5173\u95ED OpenSpeak",
-                  MB_OKCANCEL | MB_ICONQUESTION | MB_DEFBUTTON2) != IDOK) {
-    return 0;
+  if (message == WM_CLOSE) {
+    if (close_confirmation_open_) {
+      return 0;
+    }
+    if (!close_confirmed_) {
+      close_confirmation_open_ = true;
+      if (MessageBoxW(hwnd,
+                      L"\u786E\u5B9A\u8981\u5173\u95ED OpenSpeak \u5417\uFF1F",
+                      L"\u5173\u95ED OpenSpeak",
+                      MB_OKCANCEL | MB_ICONQUESTION | MB_DEFBUTTON2) != IDOK) {
+        close_confirmation_open_ = false;
+        return 0;
+      }
+      close_confirmation_open_ = false;
+      close_confirmed_ = true;
+    }
   }
   if (message == WM_GETMINMAXINFO) {
     const auto scale = FlutterDesktopGetDpiForHWND(hwnd) / 96.0;

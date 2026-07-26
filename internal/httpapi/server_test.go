@@ -1663,6 +1663,55 @@ func TestLinkPreviewRejectsLocalhost(t *testing.T) {
 	}
 }
 
+func TestChannelAttachmentUploadKinds(t *testing.T) {
+	for _, test := range []struct {
+		kind     string
+		endpoint string
+	}{
+		{kind: "image", endpoint: "images"},
+		{kind: "file", endpoint: "files"},
+	} {
+		t.Run(test.kind, func(t *testing.T) {
+			env := newChannelTestEnv(t, "none")
+			var body bytes.Buffer
+			writer := multipart.NewWriter(&body)
+			_ = writer.WriteField("encryption_mode", "none")
+			part, err := writer.CreateFormFile(test.kind, "attachment.bin")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := part.Write([]byte("attachment")); err != nil {
+				t.Fatal(err)
+			}
+			if err := writer.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/channels/"+env.channel.ID+"/"+test.endpoint, &body)
+			req.Header.Set("Authorization", "Bearer "+env.token)
+			req.Header.Set("Content-Type", writer.FormDataContentType())
+			response := httptest.NewRecorder()
+			env.server.ServeHTTP(response, req)
+			if response.Code != http.StatusOK {
+				t.Fatalf("upload status = %d, body = %s", response.Code, response.Body.String())
+			}
+			var result struct {
+				File    store.StoredFile     `json:"file"`
+				Message store.ChannelMessage `json:"message"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if result.File.Kind != "channel_"+test.kind || result.Message.Kind != test.kind {
+				t.Fatalf("unexpected kinds: file=%q message=%q", result.File.Kind, result.Message.Kind)
+			}
+			if !strings.Contains(result.File.RelativePath, "/channel-"+test.endpoint+"/") {
+				t.Fatalf("unexpected relative path %q", result.File.RelativePath)
+			}
+		})
+	}
+}
+
 func TestChannelFileUploadUsesServerE2EE(t *testing.T) {
 	env := newChannelTestEnv(t, "e2ee")
 	var body bytes.Buffer

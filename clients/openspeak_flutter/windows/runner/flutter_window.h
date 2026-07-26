@@ -73,6 +73,8 @@ class FlutterWindow : public Win32Window {
   DWORD push_to_talk_virtual_key_ = 0;
   int push_to_talk_modifiers_ = 0;
   bool push_to_talk_pressed_ = false;
+  bool close_confirmation_open_ = false;
+  bool close_confirmed_ = false;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

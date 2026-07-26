@@ -1386,40 +1386,18 @@ class OpenSpeakApi {
         rethrow;
       }
     }
-    if (plan?.external == true) {
-      final externalPlan = plan!;
-      var uploaded = false;
-      try {
-        await uploadExternalAttachment(
-          externalPlan,
-          file,
-          onProgress: onProgress,
-          cancelToken: cancelToken,
-          contentType: uploadContentType,
-        );
-        uploaded = true;
-      } catch (error) {
-        if (cancelToken?.isCancelled == true ||
-            !externalAttachmentCanFallback(
-              error,
-              sizeBytes: fallbackSize,
-              localMaxBytes: externalPlan.localMaxBytes,
-            )) {
-          rethrow;
-        }
-        onProgress?.call(0, fileLength);
-      }
-      if (uploaded) {
-        final completed = await request(
-          'POST',
-          '/api/v1/attachment-uploads/complete',
-          token: token,
-          body: {'completion_token': externalPlan.completionToken},
-        );
-        return ChannelUploadResult.fromJson(
-          (completed as Map).cast<String, dynamic>(),
-        );
-      }
+    final completed = await _uploadExternalAttachmentOrFallback(
+      token,
+      plan,
+      file,
+      fallbackSize: fallbackSize,
+      fileLength: fileLength,
+      contentType: uploadContentType,
+      onProgress: onProgress,
+      cancelToken: cancelToken,
+    );
+    if (completed != null) {
+      return ChannelUploadResult.fromJson(completed);
     }
     final decoded = await _sendMultipart(
       apiUri('/api/v1/channels/$channelId/$endpoint'),
@@ -1492,38 +1470,18 @@ class OpenSpeakApi {
         rethrow;
       }
     }
-    if (plan?.external == true) {
-      final externalPlan = plan!;
-      var uploaded = false;
-      try {
-        await uploadExternalAttachment(
-          externalPlan,
-          file,
-          onProgress: onProgress,
-          cancelToken: cancelToken,
-          contentType: uploadContentType,
-        );
-        uploaded = true;
-      } catch (error) {
-        if (cancelToken?.isCancelled == true ||
-            !externalAttachmentCanFallback(
-              error,
-              sizeBytes: fallbackSize,
-              localMaxBytes: externalPlan.localMaxBytes,
-            )) {
-          rethrow;
-        }
-        onProgress?.call(0, fileLength);
-      }
-      if (uploaded) {
-        final completed = await request(
-          'POST',
-          '/api/v1/attachment-uploads/complete',
-          token: token,
-          body: {'completion_token': externalPlan.completionToken},
-        );
-        return DirectFile.fromJson((completed as Map).cast<String, dynamic>());
-      }
+    final completed = await _uploadExternalAttachmentOrFallback(
+      token,
+      plan,
+      file,
+      fallbackSize: fallbackSize,
+      fileLength: fileLength,
+      contentType: uploadContentType,
+      onProgress: onProgress,
+      cancelToken: cancelToken,
+    );
+    if (completed != null) {
+      return DirectFile.fromJson(completed);
     }
     final decoded = await _sendMultipart(
       apiUri('/api/v1/direct-files'),
@@ -1548,6 +1506,47 @@ class OpenSpeakApi {
       cancelToken: cancelToken,
     );
     return DirectFile.fromJson(decoded);
+  }
+
+  Future<Map<String, dynamic>?> _uploadExternalAttachmentOrFallback(
+    String token,
+    AttachmentUploadPlan? plan,
+    XFile file, {
+    required int fallbackSize,
+    required int fileLength,
+    required String contentType,
+    TransferProgress? onProgress,
+    TransferCancelToken? cancelToken,
+  }) async {
+    if (plan?.external != true) return null;
+    final externalPlan = plan!;
+    try {
+      await uploadExternalAttachment(
+        externalPlan,
+        file,
+        onProgress: onProgress,
+        cancelToken: cancelToken,
+        contentType: contentType,
+      );
+    } catch (error) {
+      if (cancelToken?.isCancelled == true ||
+          !externalAttachmentCanFallback(
+            error,
+            sizeBytes: fallbackSize,
+            localMaxBytes: externalPlan.localMaxBytes,
+          )) {
+        rethrow;
+      }
+      onProgress?.call(0, fileLength);
+      return null;
+    }
+    final completed = await request(
+      'POST',
+      '/api/v1/attachment-uploads/complete',
+      token: token,
+      body: {'completion_token': externalPlan.completionToken},
+    );
+    return (completed as Map).cast<String, dynamic>();
   }
 
   Future<AttachmentUploadPlan> initiateAttachmentUpload(
