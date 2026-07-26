@@ -833,6 +833,10 @@ class VoiceSessionController extends ChangeNotifier {
   double _outputVolume = 1.0;
   final Map<String, double> _participantOutputVolumes = {};
   Timer? _speakingSyncTimer;
+  bool _voiceStateSyncRunning = false;
+  bool _voiceStateSyncPending = false;
+  final List<({Completer<void> completion, bool throwOnError})>
+  _voiceStateSyncWaiters = [];
   Timer? _serverLatencyTimer;
   Timer? _audioStatsTimer;
   Timer? _liveKitReconnectTimer;
@@ -3913,7 +3917,46 @@ class VoiceSessionController extends ChangeNotifier {
     }
   }
 
-  Future<void> _syncVoiceState({bool throwOnError = false}) async {
+  Future<void> _syncVoiceState({bool throwOnError = false}) {
+    final completion = Completer<void>();
+    _voiceStateSyncWaiters.add((
+      completion: completion,
+      throwOnError: throwOnError,
+    ));
+    _voiceStateSyncPending = true;
+    if (!_voiceStateSyncRunning) {
+      _voiceStateSyncRunning = true;
+      unawaited(_drainVoiceStateSync());
+    }
+    return completion.future;
+  }
+
+  Future<void> _drainVoiceStateSync() async {
+    while (_voiceStateSyncPending) {
+      _voiceStateSyncPending = false;
+      final waiters = List.of(_voiceStateSyncWaiters);
+      _voiceStateSyncWaiters.clear();
+      Object? failure;
+      StackTrace? failureStackTrace;
+      try {
+        await _performVoiceStateSync();
+      } catch (error, stackTrace) {
+        failure = error;
+        failureStackTrace = stackTrace;
+      }
+      for (final waiter in waiters) {
+        if (failure != null && waiter.throwOnError) {
+          waiter.completion.completeError(failure, failureStackTrace);
+        } else {
+          waiter.completion.complete();
+        }
+      }
+    }
+    _voiceStateSyncRunning = false;
+  }
+
+  Future<void> _performVoiceStateSync() async {
+    if (_disposed) return;
     final api = _api;
     final authToken = _authToken;
     final serverId = _serverId;
@@ -3929,26 +3972,21 @@ class VoiceSessionController extends ChangeNotifier {
         !snapshot.reconnecting) {
       return;
     }
-    try {
-      final state = await api.setVoiceState(
-        authToken,
-        serverId,
-        channelId,
-        muted: snapshot.muted,
-        deafened: snapshot.listenOff,
-        speaking: snapshot.speaking,
-        screenSharing: isScreenSharing,
-        screenShareResolution: _screenShareQuality?.resolution ?? '',
-        screenShareFPS: _screenShareQuality?.fps ?? 0,
-        screenShareMediaNodeId: _screenToken?.mediaNodeId ?? '',
-      );
-      _setSnapshot(snapshot.copyWith(voiceState: state));
-      if (isScreenSharing && !state.screenSharing) {
-        throw OpenSpeakException('服务器拒绝了当前屏幕共享档位');
-      }
-    } catch (_) {
-      if (throwOnError) rethrow;
-      // Voice state sync is best-effort; the UI keeps the local media state.
+    final state = await api.setVoiceState(
+      authToken,
+      serverId,
+      channelId,
+      muted: snapshot.muted,
+      deafened: snapshot.listenOff,
+      speaking: snapshot.speaking,
+      screenSharing: isScreenSharing,
+      screenShareResolution: _screenShareQuality?.resolution ?? '',
+      screenShareFPS: _screenShareQuality?.fps ?? 0,
+      screenShareMediaNodeId: _screenToken?.mediaNodeId ?? '',
+    );
+    _setSnapshot(snapshot.copyWith(voiceState: state));
+    if (isScreenSharing && !state.screenSharing) {
+      throw OpenSpeakException('服务器拒绝了当前屏幕共享档位');
     }
   }
 

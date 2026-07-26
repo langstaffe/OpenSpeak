@@ -34,6 +34,43 @@ void main() {
     expect(useMobileWebLayout(isWeb: false, width: 320), isFalse);
   });
 
+  test('encrypted channel history loads each epoch key once', () {
+    ChannelMessage message(String id, String epochId, String kind) =>
+        ChannelMessage(
+          id: id,
+          channelId: 'channel',
+          senderUserId: 'sender',
+          senderDisplayName: 'Sender',
+          kind: kind,
+          encryptionMode: 'e2ee',
+          epochId: epochId,
+          body: 'ciphertext',
+          metadata: const {},
+          createdAt: null,
+        );
+
+    expect(
+      encryptedChannelMessageEpochIds([
+        message('1', 'old', 'text'),
+        message('2', 'old', 'text'),
+        message('3', 'current', 'text'),
+        message('4', 'current', 'image'),
+        ChannelMessage(
+          id: '5',
+          channelId: 'channel',
+          senderUserId: 'sender',
+          senderDisplayName: 'Sender',
+          kind: 'text',
+          encryptionMode: 'none',
+          body: 'plain',
+          metadata: const {},
+          createdAt: null,
+        ),
+      ]),
+      ['old', 'current'],
+    );
+  });
+
   test('mobile Web chat uses the default list cache extent', () {
     expect(messageListCacheExtent(isWeb: true, width: 719), isNull);
     expect(messageListCacheExtent(isWeb: true, width: 720), 900);
