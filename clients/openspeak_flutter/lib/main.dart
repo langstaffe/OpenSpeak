@@ -4007,7 +4007,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       setState(() => error = '当前账号没有发送此内容的权限');
       return;
     }
-    messageController.clear();
     await runGuarded(() async {
       final mode = selectedServer?.encryptionMode ?? 'none';
       late ChannelMessage message;
@@ -4051,6 +4050,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         );
       }
       if (!mounted || selectedChannel?.id != channel.id) return;
+      if (messageController.text.trim() == body) messageController.clear();
       setState(() => channelMessages.add(message));
       WidgetsBinding.instance.addPostFrameCallback(
         (_) => scrollMessagesToEnd(),
@@ -5313,9 +5313,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     if (cached != null) return cached;
     final future = () async {
       final metadata = await readAudioAttachmentMetadata(attachment);
-      if (!metadata.hasContent) {
-        audioMetadataFutures.remove(attachment.fileId);
-      }
       return metadata.withFallbackTitle(attachment.displayName);
     }();
     audioMetadataFutures[attachment.fileId] = future;
