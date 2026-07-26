@@ -106,10 +106,12 @@ cp -R "${WEB_ROOT}/." "${PKG_DIR}/web/"
 
 install -m 0755 "${ROOT_DIR}/deploy/openspeak_startscript.sh" "${PKG_DIR}/openspeak_startscript.sh"
 install -m 0755 "${ROOT_DIR}/deploy/install-linux.sh" "${PKG_DIR}/deploy/install-linux.sh"
+install -m 0755 "${ROOT_DIR}/deploy/install-journald.sh" "${PKG_DIR}/deploy/install-journald.sh"
 install -m 0644 "${ROOT_DIR}/deploy/openspeak.service" "${PKG_DIR}/deploy/openspeak.service"
 install -m 0644 "${ROOT_DIR}/deploy/livekit.service" "${PKG_DIR}/deploy/livekit.service"
 install -m 0644 "${ROOT_DIR}/deploy/caddy.service" "${PKG_DIR}/deploy/caddy.service"
 install -m 0644 "${ROOT_DIR}/deploy/openspeak.env.example" "${PKG_DIR}/deploy/openspeak.env.example"
+install -m 0644 "${ROOT_DIR}/deploy/openspeak-journald.conf" "${PKG_DIR}/deploy/openspeak-journald.conf"
 install -m 0644 "${ROOT_DIR}/deploy/livekit.yaml.example" "${PKG_DIR}/deploy/livekit.yaml.example"
 
 cat > "${PKG_DIR}/README.txt" <<'EOF'
@@ -152,6 +154,9 @@ Notes:
       run/
   - The package installs OpenSpeak as systemd service: openspeak.service.
   - If livekit-server is bundled, it also installs: openspeak-livekit.service.
+  - Main servers use deploy/openspeak-journald.conf as the default journal
+    policy. Formal external-node installs must also run:
+      sudo ./deploy/install-journald.sh
   - The installer generates LiveKit API credentials and writes them to:
       /etc/openspeak/livekit.yaml
       /etc/openspeak/openspeak.env

@@ -48,6 +48,8 @@ This installer is designed for release tarballs that contain:
   bin/livekit-server              when installing with LiveKit
   deploy/*.service
   deploy/*.example
+  deploy/install-journald.sh
+  deploy/openspeak-journald.conf
 USAGE
 }
 
@@ -118,6 +120,7 @@ OPEN_SPEAK_CTL_BIN="${PACKAGE_DIR}/bin/openspeakctl"
 LIVEKIT_BIN="${PACKAGE_DIR}/bin/livekit-server"
 CADDY_BIN="${PACKAGE_DIR}/bin/caddy"
 WEB_ROOT="${PACKAGE_DIR}/web"
+JOURNALD_INSTALLER="${SCRIPT_DIR}/install-journald.sh"
 
 if [[ ! -f "${OPEN_SPEAK_BIN}" ]]; then
   echo "missing ${OPEN_SPEAK_BIN}" >&2
@@ -133,6 +136,10 @@ if [[ ! -f "${CADDY_BIN}" ]]; then
 fi
 if [[ ! -f "${WEB_ROOT}/index.html" ]]; then
   echo "missing ${WEB_ROOT}/index.html" >&2
+  exit 1
+fi
+if [[ ! -x "${JOURNALD_INSTALLER}" ]]; then
+  echo "missing or non-executable ${JOURNALD_INSTALLER}" >&2
   exit 1
 fi
 CADDY_VERSION="$("${CADDY_BIN}" version)"
@@ -179,6 +186,7 @@ fi
 install -d -m 0755 "${PREFIX}"
 install -d -m 0750 -o openspeak -g openspeak "${DATA_DIR}" "${DATA_DIR}/files" "${DATA_DIR}/tmp/direct_files" "${DATA_DIR}/caddy" "${LOG_DIR}"
 install -d -m 0750 "${CONFIG_DIR}"
+"${JOURNALD_INSTALLER}"
 
 install -m 0755 "${OPEN_SPEAK_BIN}" "${PREFIX}/openspeak-linux-amd64"
 install -m 0755 "${OPEN_SPEAK_CTL_BIN}" "${PREFIX}/openspeakctl"
@@ -199,7 +207,6 @@ OS_DATABASE_PATH=${DATA_DIR}/openspeak.db
 OS_FILE_ROOT=${DATA_DIR}/files
 OS_DIRECT_FILE_ROOT=${DATA_DIR}/tmp/direct_files
 OS_WEB_ROOT=${PREFIX}/web
-OS_LOG_FILE=${LOG_DIR}/openspeak.log
 OS_LOG_LEVEL=info
 OS_JWT_SECRET=${JWT_SECRET}
 OS_JWT_TTL_SECONDS=86400
@@ -219,6 +226,10 @@ OS_LIVEKIT_TOKEN_TTL_SECONDS=3600
 EOF
   chmod 0640 "${CONFIG_DIR}/openspeak.env"
   chown root:openspeak "${CONFIG_DIR}/openspeak.env"
+fi
+
+if grep -Fqx "OS_LOG_FILE=${LOG_DIR}/openspeak.log" "${CONFIG_DIR}/openspeak.env"; then
+  sed -i "\|^OS_LOG_FILE=${LOG_DIR}/openspeak\.log$|d" "${CONFIG_DIR}/openspeak.env"
 fi
 
 CONFIGURED_ADDR="$(sed -n 's/^OS_ADDR=//p' "${CONFIG_DIR}/openspeak.env" | tail -n 1)"
