@@ -499,12 +499,26 @@ func (h *Hub) remove(c *Client) []Event {
 	_ = c.conn.Close()
 	if c.ServerID == "" || h.userOnlineInServerLocked(c.ServerID, c.UserID) {
 		h.mu.Unlock()
+		slog.Info("realtime websocket removed",
+			"user_id", c.UserID,
+			"server_id", c.ServerID,
+			"device_id", c.DeviceID,
+			"client_type", c.ClientType,
+			"connected_at", c.ConnectedAt,
+			"last_server_connection", false,
+		)
 		return nil
 	}
 	events := []Event{}
+	voiceStateCleared := false
+	channelStateCleared := false
+	clearedVoiceChannelID := ""
+	clearedCurrentChannelID := ""
 	if serverVoice := h.voiceState[c.ServerID]; serverVoice != nil {
 		if state, ok := serverVoice[c.UserID]; ok {
 			delete(serverVoice, c.UserID)
+			voiceStateCleared = true
+			clearedVoiceChannelID = state.ChannelID
 			events = append(events, stamp(Event{
 				Type:      "voice.left",
 				ServerID:  c.ServerID,
@@ -519,6 +533,8 @@ func (h *Hub) remove(c *Client) []Event {
 	if serverChannels := h.currentChannel[c.ServerID]; serverChannels != nil {
 		if state, ok := serverChannels[c.UserID]; ok {
 			delete(serverChannels, c.UserID)
+			channelStateCleared = true
+			clearedCurrentChannelID = state.ChannelID
 			events = append(events, stamp(Event{
 				Type:      "channel.presence_left",
 				ServerID:  c.ServerID,
@@ -535,6 +551,18 @@ func (h *Hub) remove(c *Client) []Event {
 	}
 	userOffline := h.userOffline
 	h.mu.Unlock()
+	slog.Info("realtime websocket removed",
+		"user_id", c.UserID,
+		"server_id", c.ServerID,
+		"device_id", c.DeviceID,
+		"client_type", c.ClientType,
+		"connected_at", c.ConnectedAt,
+		"last_server_connection", true,
+		"channel_state_cleared", channelStateCleared,
+		"voice_state_cleared", voiceStateCleared,
+		"cleared_current_channel_id", clearedCurrentChannelID,
+		"cleared_voice_channel_id", clearedVoiceChannelID,
+	)
 	if userOffline != nil {
 		userOffline(c.ServerID, c.UserID)
 	}
@@ -1020,6 +1048,14 @@ func (c *Client) readLoop() {
 	for {
 		var event Event
 		if err := c.conn.ReadJSON(&event); err != nil {
+			slog.Info("realtime websocket read ended",
+				"user_id", c.UserID,
+				"server_id", c.ServerID,
+				"device_id", c.DeviceID,
+				"client_type", c.ClientType,
+				"connected_at", c.ConnectedAt,
+				"error", err,
+			)
 			return
 		}
 		switch event.Type {
@@ -1047,12 +1083,29 @@ func (c *Client) writeLoop() {
 				return
 			}
 			if err := c.conn.WriteJSON(event); err != nil {
+				slog.Info("realtime websocket write ended",
+					"user_id", c.UserID,
+					"server_id", c.ServerID,
+					"device_id", c.DeviceID,
+					"client_type", c.ClientType,
+					"connected_at", c.ConnectedAt,
+					"event_type", event.Type,
+					"error", err,
+				)
 				return
 			}
 		case <-ticker.C:
 			c.hub.touchPresence(c)
 			_ = c.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				slog.Info("realtime websocket ping ended",
+					"user_id", c.UserID,
+					"server_id", c.ServerID,
+					"device_id", c.DeviceID,
+					"client_type", c.ClientType,
+					"connected_at", c.ConnectedAt,
+					"error", err,
+				)
 				return
 			}
 		}
