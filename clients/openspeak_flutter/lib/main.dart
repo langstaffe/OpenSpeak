@@ -1411,7 +1411,15 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
             });
     if (kIsWeb) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) unawaited(login());
+        if (!mounted) return;
+        unawaited(() async {
+          try {
+            await loadLocalProfile();
+          } catch (exception) {
+            ClientLog.write('profile', 'Web profile load failed: $exception');
+          }
+          if (mounted) await login();
+        }());
       });
     } else {
       unawaited(loadSavedConnections());
@@ -9421,6 +9429,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                     ? () => unawaited(setMuted(!snapshot.muted))
                     : null,
               ),
+              const SizedBox(width: 28),
               StatusBarIconButton(
                 tooltip: snapshot.listenOff ? '开启收听' : '关闭收听',
                 icon: snapshot.listenOff ? Icons.volume_off : Icons.volume_up,
