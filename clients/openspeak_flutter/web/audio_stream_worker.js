@@ -1,5 +1,6 @@
 const CHUNK_BYTES = 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 30000;
+const STATIC_CACHE_NAME = 'openspeak-versioned-static-v1';
 const pendingRanges = new Map();
 let nextRequestId = 0;
 
@@ -22,10 +23,62 @@ self.addEventListener('message', (event) => {
 
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
-  const audioPath = new URL('__openspeak_audio__/', self.registration.scope).pathname;
+  const scopeUrl = new URL(self.registration.scope);
+  const assetVersion = versionedStaticAssetVersion(event.request, url, scopeUrl);
+  if (assetVersion) {
+    const task = loadVersionedStaticAsset(event.request, assetVersion, scopeUrl);
+    event.respondWith(task.then(({response}) => response));
+    event.waitUntil(task.then(({cacheWrite}) => cacheWrite));
+    return;
+  }
+  const audioPath = new URL('__openspeak_audio__/', scopeUrl).pathname;
   if (!url.pathname.startsWith(audioPath)) return;
   event.respondWith(streamAudio(event, url, audioPath));
 });
+
+function versionedStaticAssetVersion(request, url, scopeUrl) {
+  if (request.method !== 'GET' || url.origin !== scopeUrl.origin ||
+      request.headers.has('Range') || !url.pathname.startsWith(scopeUrl.pathname)) {
+    return null;
+  }
+  const relativePath = url.pathname.slice(scopeUrl.pathname.length);
+  const match = /^assets-v-([A-Za-z0-9_-]+)\/(?:main\.dart\.js|canvaskit\/.+)$/.exec(relativePath);
+  return match ? match[1] : null;
+}
+
+async function loadVersionedStaticAsset(request, assetVersion, scopeUrl) {
+  let cache;
+  try {
+    cache = await caches.open(STATIC_CACHE_NAME);
+    const cached = await cache.match(request);
+    if (cached) return {response: cached, cacheWrite: Promise.resolve()};
+  } catch (error) {
+    console.warn('OpenSpeak static cache unavailable:', error);
+    return {response: await fetch(request), cacheWrite: Promise.resolve()};
+  }
+
+  const response = await fetch(request);
+  const cacheWrite = response.ok
+    ? storeVersionedStaticAsset(cache, request, response.clone(), assetVersion, scopeUrl)
+        .catch((error) => console.warn('OpenSpeak static cache write failed:', error))
+    : Promise.resolve();
+  return {response, cacheWrite};
+}
+
+async function storeVersionedStaticAsset(cache, request, response, assetVersion, scopeUrl) {
+  await cache.put(request, response);
+  const cachedRequests = await cache.keys();
+  await Promise.all(cachedRequests.map((cachedRequest) => {
+    const cachedVersion = versionedStaticAssetVersion(
+      cachedRequest,
+      new URL(cachedRequest.url),
+      scopeUrl,
+    );
+    return cachedVersion && cachedVersion !== assetVersion
+      ? cache.delete(cachedRequest)
+      : Promise.resolve();
+  }));
+}
 
 async function streamAudio(event, url, audioPath) {
   const size = Number.parseInt(url.searchParams.get('size') || '', 10);
