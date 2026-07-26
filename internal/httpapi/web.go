@@ -7,12 +7,26 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"openspeak/internal/store"
 )
 
 var webPathPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+const (
+	webAssetVersionPlaceholder = "__OPENSPEAK_WEB_ASSET_VERSION__"
+	versionedWebAssetPrefix    = "assets-v-"
+)
+
+func currentWebAssetVersion(webRoot string) string {
+	info, err := os.Stat(filepath.Join(webRoot, "main.dart.js"))
+	if err != nil || info.IsDir() {
+		return ""
+	}
+	return strconv.FormatInt(info.ModTime().UnixNano(), 36) + "-" + strconv.FormatInt(info.Size(), 36)
+}
 
 func normalizeWebPath(value string) (string, error) {
 	value = strings.Trim(strings.TrimSpace(value), "/")
@@ -163,12 +177,28 @@ func (s *Server) serveWeb(w http.ResponseWriter, r *http.Request) bool {
 	if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 		return false
 	}
+	requestPath := filepath.ToSlash(clean)
+	assetVersion := ""
+	if requestPath == "flutter_bootstrap.js" || strings.HasPrefix(requestPath, versionedWebAssetPrefix) {
+		assetVersion = currentWebAssetVersion(s.cfg.WebRoot)
+	}
+	if strings.HasPrefix(requestPath, versionedWebAssetPrefix) {
+		if assetVersion == "" {
+			return false
+		}
+		versionedPrefix := versionedWebAssetPrefix + assetVersion + "/"
+		if strings.HasPrefix(requestPath, versionedPrefix) {
+			clean = filepath.FromSlash(strings.TrimPrefix(requestPath, versionedPrefix))
+		} else {
+			return false
+		}
+	}
 	asset := filepath.Join(s.cfg.WebRoot, clean)
 	info, statErr := os.Stat(asset)
 	if statErr != nil || info.IsDir() {
 		return false
 	}
-	if clean == "index.html" {
+	if requestPath == "index.html" {
 		raw, readErr := os.ReadFile(asset)
 		if readErr != nil {
 			return false
@@ -184,7 +214,25 @@ func (s *Server) serveWeb(w http.ResponseWriter, r *http.Request) bool {
 		_, _ = w.Write([]byte(body))
 		return true
 	}
-	if strings.HasPrefix(filepath.ToSlash(clean), "fonts/") {
+	if requestPath == "flutter_bootstrap.js" && assetVersion != "" {
+		raw, readErr := os.ReadFile(asset)
+		if readErr != nil {
+			return false
+		}
+		body := strings.ReplaceAll(string(raw), webAssetVersionPlaceholder, assetVersion)
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Length", fmt.Sprint(len(body)))
+		disableDownloadWriteTimeout(w)
+		if r.Method == http.MethodHead {
+			return true
+		}
+		_, _ = w.Write([]byte(body))
+		return true
+	}
+	if strings.HasPrefix(requestPath, versionedWebAssetPrefix) {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	} else if strings.HasPrefix(filepath.ToSlash(clean), "fonts/") {
 		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	} else {
 		w.Header().Set("Cache-Control", "no-cache")

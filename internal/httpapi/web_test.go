@@ -21,6 +21,16 @@ func TestWebSettingsRouteAndSessionInvalidation(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(webRoot, "main.dart.js"), []byte(`window.openspeak=true;`), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(webRoot, "flutter_bootstrap.js"), []byte(`const base = "assets-v-__OPENSPEAK_WEB_ASSET_VERSION__/";`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	canvasKitDir := filepath.Join(webRoot, "canvaskit")
+	if err := os.MkdirAll(canvasKitDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(canvasKitDir, "canvaskit.wasm"), []byte("canvas-kit"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	fontDir := filepath.Join(webRoot, "fonts", "notosanssc", "v37")
 	if err := os.MkdirAll(fontDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -76,6 +86,31 @@ func TestWebSettingsRouteAndSessionInvalidation(t *testing.T) {
 	}
 	if !asset.writeTimeoutDisabled() {
 		t.Fatal("custom asset retained the server write timeout")
+	}
+	if got := asset.Header().Get("Cache-Control"); got != "no-cache" {
+		t.Fatalf("custom unversioned asset cache = %q", got)
+	}
+	assetVersion := currentWebAssetVersion(webRoot)
+	bootstrap := httptest.NewRecorder()
+	env.server.ServeHTTP(bootstrap, httptest.NewRequest(http.MethodGet, "https://example.test/chat/flutter_bootstrap.js", nil))
+	if bootstrap.Code != http.StatusOK || !strings.Contains(bootstrap.Body.String(), "assets-v-"+assetVersion+"/") || strings.Contains(bootstrap.Body.String(), webAssetVersionPlaceholder) {
+		t.Fatalf("custom bootstrap = %d %q", bootstrap.Code, bootstrap.Body.String())
+	}
+	if got := bootstrap.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("custom bootstrap cache = %q", got)
+	}
+	versionedAsset := httptest.NewRecorder()
+	env.server.ServeHTTP(versionedAsset, httptest.NewRequest(http.MethodGet, "https://example.test/chat/assets-v-"+assetVersion+"/canvaskit/canvaskit.wasm", nil))
+	if versionedAsset.Code != http.StatusOK || versionedAsset.Body.String() != "canvas-kit" {
+		t.Fatalf("custom versioned asset = %d %q", versionedAsset.Code, versionedAsset.Body.String())
+	}
+	if got := versionedAsset.Header().Get("Cache-Control"); got != "public, max-age=31536000, immutable" {
+		t.Fatalf("custom versioned asset cache = %q", got)
+	}
+	staleAsset := httptest.NewRecorder()
+	env.server.ServeHTTP(staleAsset, httptest.NewRequest(http.MethodGet, "https://example.test/chat/assets-v-stale/main.dart.js", nil))
+	if staleAsset.Code != http.StatusNotFound {
+		t.Fatalf("stale versioned asset status = %d", staleAsset.Code)
 	}
 	font := newDeadlineResponseRecorder()
 	env.server.ServeHTTP(font, httptest.NewRequest(http.MethodGet, "https://example.test/chat/fonts/notosanssc/v37/subset.woff2", nil))

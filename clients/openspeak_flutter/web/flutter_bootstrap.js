@@ -43,6 +43,7 @@ async function registerAudioStreamWorker() {
 }
 
 registerAudioStreamWorker().finally(() => _flutter.loader.load({config: {
-  canvasKitBaseUrl: 'canvaskit',
+  entrypointBaseUrl: 'assets-v-__OPENSPEAK_WEB_ASSET_VERSION__/',
+  canvasKitBaseUrl: 'assets-v-__OPENSPEAK_WEB_ASSET_VERSION__/canvaskit',
   fontFallbackBaseUrl: 'fonts/',
 }}));
