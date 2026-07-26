@@ -9146,6 +9146,8 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
             state.userId,
             participantUserIds,
             speakingUserIds,
+            localUserId: session?.user.id,
+            reportedSpeaking: state.speaking,
           ),
           screenSharing: state.screenSharing,
           screenShareResolution: state.screenShareResolution,
@@ -10811,10 +10813,13 @@ Set<String> voiceChannelMemberUserIds(
 bool channelMemberIsSpeaking(
   String userId,
   Set<String> currentRoomParticipantUserIds,
-  Set<String> currentRoomSpeakingUserIds,
-) =>
+  Set<String> currentRoomSpeakingUserIds, {
+  String? localUserId,
+  bool reportedSpeaking = false,
+}) =>
     currentRoomParticipantUserIds.contains(userId) &&
-    currentRoomSpeakingUserIds.contains(userId);
+    (currentRoomSpeakingUserIds.contains(userId) ||
+        (userId != localUserId && reportedSpeaking));
 
 bool shouldUploadLocalAvatar({
   required bool pendingSync,

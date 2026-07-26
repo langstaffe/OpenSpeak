@@ -1975,6 +1975,36 @@ void main() {
       channelMemberIsSpeaking('e', currentRoomUsers, speakingUsers),
       isFalse,
     );
+    expect(
+      channelMemberIsSpeaking(
+        'a',
+        currentRoomUsers,
+        speakingUsers,
+        localUserId: 'c',
+        reportedSpeaking: true,
+      ),
+      isTrue,
+    );
+    expect(
+      channelMemberIsSpeaking(
+        'e',
+        currentRoomUsers,
+        speakingUsers,
+        localUserId: 'c',
+        reportedSpeaking: true,
+      ),
+      isFalse,
+    );
+    expect(
+      channelMemberIsSpeaking(
+        'a',
+        currentRoomUsers,
+        speakingUsers,
+        localUserId: 'a',
+        reportedSpeaking: true,
+      ),
+      isFalse,
+    );
   });
 
   test('system default audio labels fall back when names are unavailable', () {
