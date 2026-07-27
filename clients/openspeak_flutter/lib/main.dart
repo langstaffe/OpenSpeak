@@ -17,6 +17,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart'
     show
+        BrowserContextMenu,
         Clipboard,
         ClipboardData,
         FilteringTextInputFormatter,
@@ -45,6 +46,7 @@ import 'voice_session_controller.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  if (kIsWeb) await BrowserContextMenu.disableContextMenu();
   await ClientLog.initialize();
   FlutterError.onError = (details) {
     FlutterError.presentError(details);
