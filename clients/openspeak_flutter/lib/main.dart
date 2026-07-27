@@ -29,7 +29,6 @@ import 'package:flutter_webrtc/flutter_webrtc.dart' as rtc;
 import 'package:livekit_client/livekit_client.dart' as lk;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:web_socket_channel/web_socket_channel.dart';
 import 'attachment_cache_service.dart';
 import 'attachment_transfer_controller.dart';
 import 'browser_actions.dart';
@@ -39,6 +38,7 @@ import 'microphone_activation.dart';
 import 'openspeak_api.dart';
 import 'owner_identity_service.dart';
 import 'platform_open.dart';
+import 'realtime_connection_controller.dart';
 import 'sound_effects.dart';
 import 'voice_session_controller.dart';
 
@@ -1290,8 +1290,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   final pushToTalkHotkey = GlobalPushToTalkHotkey();
 
   OpenSpeakApi? api;
-  WebSocketChannel? socket;
-  int socketGeneration = 0;
   Timer? realtimeStateRefreshTimer;
   Timer? channelEnvelopeRefreshTimer;
   int channelMessagesLoadGeneration = 0;
@@ -1304,13 +1302,13 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   List<Channel> channels = [];
   PresenceSnapshot presence = PresenceSnapshot.empty();
   late final VoiceSessionController voiceSession;
+  late final RealtimeConnectionController realtimeConnection;
   OsServer? selectedServer;
   Channel? selectedChannel;
   ChatScope chatScope = ChatScope.channel;
   String? selectedDirectUserId;
   VoiceState? myVoiceState;
   bool loading = false;
-  bool wsConnected = false;
   String? error;
   bool messagesLoading = false;
   bool attachmentDragActive = false;
@@ -1391,6 +1389,8 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   @override
   void initState() {
     super.initState();
+    realtimeConnection = RealtimeConnectionController()
+      ..addListener(onRealtimeConnectionChanged);
     mutedSpeechReminder = MutedSpeechReminder(onMutedSpeechWarning);
     audioDeviceMonitor = AudioDeviceMonitor(
       enumerateDevices: rtc.navigator.mediaDevices.enumerateDevices,
@@ -1466,7 +1466,8 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   @override
   void dispose() {
     attachmentTransfers.cancelAndClear();
-    socket?.sink.close();
+    realtimeConnection.removeListener(onRealtimeConnectionChanged);
+    realtimeConnection.dispose();
     realtimeStateRefreshTimer?.cancel();
     resetChannelKeyCoordination();
     voiceDisconnectSoundTimer?.cancel();
@@ -1499,6 +1500,10 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     messageController.dispose();
     messageScrollController.dispose();
     super.dispose();
+  }
+
+  void onRealtimeConnectionChanged() {
+    if (mounted) setState(() {});
   }
 
   void onVoiceSessionChanged() {
@@ -1950,7 +1955,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         mobileTabIndex = 0;
         mobileChatOpen = false;
         activity.clear();
-        wsConnected = false;
       });
       await showWebRtcWarningIfNeeded();
       if (!isActiveConnectionGeneration(generation)) return;
@@ -1985,13 +1989,10 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   Future<void> disconnectCurrentServer() async {
     connectionGeneration += 1;
     channelJoinQueue.invalidate();
-    socketGeneration += 1;
-    final closingSocket = socket;
-    socket = null;
     resetChannelKeyCoordination();
     await leaveVoiceSession(clearVoiceState: true);
     voiceSession.stopServerLatencyMonitor();
-    await closingSocket?.sink.close();
+    await realtimeConnection.close();
     if (!mounted) return;
     attachmentTransfers.cancelAndClear();
     setState(() {
@@ -2024,7 +2025,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       currentServerRole = 'user';
       currentServerPermissions = <String>{};
       activity.clear();
-      wsConnected = false;
       error = null;
     });
     unawaited(stopAudioPlayback());
@@ -2561,11 +2561,8 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     final dev = device;
     if (client == null || auth == null || dev == null) return;
     final activeGeneration = generation ?? connectionGeneration;
-    socketGeneration += 1;
-    final closingSocket = socket;
-    socket = null;
     resetChannelKeyCoordination();
-    await closingSocket?.sink.close();
+    await realtimeConnection.close();
     if (!isActiveConnectionGeneration(activeGeneration)) return;
     setState(() {
       error = null;
@@ -2597,7 +2594,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       currentServerRole = 'user';
       currentServerPermissions = <String>{};
       myVoiceState = null;
-      wsConnected = false;
     });
     await stopAudioPlayback();
     final initialState = await client.getServerState(auth.token, server.id);
@@ -3022,22 +3018,27 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     OsServer server, {
     int? expectedConnectionGeneration,
   }) async {
-    final nextSocket = await client.openWebSocket(
-      auth.token,
-      dev.id,
-      server.id,
+    return realtimeConnection.connect(
+      open: () => client.openWebSocket(auth.token, dev.id, server.id),
+      canActivate: expectedConnectionGeneration == null
+          ? null
+          : () => isActiveConnectionGeneration(expectedConnectionGeneration),
+      handleEvent: handleRealtimeEvent,
+      onError: (exception, stackTrace) {
+        ClientLog.error('realtime.websocket', exception, stackTrace);
+        if (mounted) {
+          setState(() => error = 'WebSocket disconnected: $exception');
+        }
+      },
+      onDisconnected: (generation, closeCode, closeReason) {
+        if (!mounted) return;
+        ClientLog.write(
+          'realtime.websocket',
+          'closed code=$closeCode reason=${closeReason ?? ''}',
+        );
+        unawaited(reconnectWebSocketAfterDrop(generation));
+      },
     );
-    if (expectedConnectionGeneration != null &&
-        !isActiveConnectionGeneration(expectedConnectionGeneration)) {
-      await nextSocket.sink.close();
-      return false;
-    }
-    socketGeneration += 1;
-    final generation = socketGeneration;
-    socket = nextSocket;
-    setState(() => wsConnected = true);
-    unawaited(_readSocket(nextSocket, generation));
-    return true;
   }
 
   void scheduleRealtimeStateRefresh() {
@@ -3108,137 +3109,115 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     }
   }
 
-  Future<void> _readSocket(WebSocketChannel ws, int generation) async {
-    try {
-      await for (final raw in ws.stream) {
-        if (!identical(socket, ws) || generation != socketGeneration) return;
-        if (raw is! String) continue;
-        final event = RealtimeEvent.fromJson(
-          jsonDecode(raw) as Map<String, dynamic>,
-        );
-        if (kIsWeb && event.type == 'web.settings_changed') {
-          await disconnectCurrentServer();
-          if (mounted) {
-            setState(() => error = '网页端配置已更改，请从新的访问地址重新进入');
-          }
-          return;
-        }
-        setState(() {
-          activity.insert(0, event);
-          if (activity.length > 80) activity.removeLast();
-        });
-        if (event.type.startsWith('voice.')) {
-          applyRealtimeVoiceEvent(event);
-        } else if (event.type.startsWith('user.') ||
-            event.type.startsWith('channel.presence_') ||
-            event.type.startsWith('channel.access_') ||
-            event.type == 'server.permissions_updated') {
-          scheduleRealtimeStateRefresh();
-        }
-        if (event.type == 'voice.state_changed' &&
-            event.fromUser == session?.user.id) {
-          final state = event.payload['state'];
-          if (state is Map<String, dynamic>) {
-            final forcedDeafened = state['deafened'] == true;
-            final forcedMuted = state['muted'] == true;
-            final screenShareAccepted = state['screen_sharing'] == true;
-            if (forcedDeafened && !voiceSession.snapshot.listenOff) {
-              await voiceSession.setListenOff(true);
-            } else if (forcedMuted && !voiceSession.snapshot.muted) {
-              await voiceSession.setMuted(true);
-            }
-            if (!screenShareAccepted && voiceSession.isScreenSharing) {
-              await voiceSession.stopScreenShare();
-            }
-          }
-        }
-        if (event.type == 'channel.message_created') {
-          handleChannelMessage(event);
-        }
-        if (event.type == 'channel.message_deleted') {
-          handleChannelMessageDeleted(event);
-        }
-        if (event.type == 'e2ee.envelope_created') {
-          handleChannelEnvelopeCreated(event);
-        }
-        if (event.type == 'e2ee.media_envelope_created') {
-          handleChannelEnvelopeCreated(event, media: true);
-        }
-        if (event.type == 'e2ee.key_requested') {
-          unawaited(handleChannelKeyRequest(event));
-        }
-        if (event.type == 'e2ee.media_key_requested') {
-          unawaited(handleChannelKeyRequest(event, media: true));
-        }
-        if (event.type == 'e2ee.media_key_activated') {
-          unawaited(handleVoiceMediaKeyActivated(event));
-        }
-        if (event.type == 'e2ee.media_key_fallback') {
-          unawaited(handleVoiceMediaKeyFallback(event));
-        }
-        if ((event.type == 'channel.access_granted' ||
-                event.type == 'channel.epoch_changed') &&
-            selectedServer?.encryptionMode == 'e2ee') {
-          unawaited(handleChannelEpochChanged(event));
-        }
-        if (event.type == 'direct.file_expired') {
-          handleDirectFileExpired(event);
-        }
-        if (event.type == 'direct.message_created') {
-          await handleDirectMessage(event);
-        }
-        if (event.type == 'direct.message_deleted') {
-          handleDirectMessageDeleted(event);
-        }
-        if (event.type == 'server.tls_enabled') {
-          final secureUrl = event.payload['secure_url'] as String? ?? '';
-          if (secureUrl.isNotEmpty) {
-            await persistSelectedConnectionUrl(secureUrl);
-            if (mounted) await login();
-          }
-          return;
-        }
-        if (event.type == 'server.encryption_changed') {
-          final plainUrl = event.payload['plain_url'] as String? ?? '';
-          if (plainUrl.isNotEmpty) {
-            await persistSelectedConnectionUrl(plainUrl);
-          }
-          if (mounted) await login();
-          return;
-        }
-        if (event.type == 'owner.credentials_revoked') {
-          final serverId = selectedServer?.id;
-          if (serverId != null) {
-            await ownerIdentity.deleteCredential(serverId);
-          }
-          if (mounted) {
-            setState(() => error = '本机的 owner 凭据已被服务端撤销');
-          }
-        }
-        if ((event.type == 'member.kicked' || event.type == 'member.banned') &&
-            event.fromUser == session?.user.id) {
-          final message = event.type == 'member.banned'
-              ? '你已被此服务器封禁'
-              : '你已被服务器管理员踢出';
-          unawaited(handleForcedServerDisconnect(message));
-          return;
-        }
+  Future<bool> handleRealtimeEvent(RealtimeEvent event) async {
+    if (kIsWeb && event.type == 'web.settings_changed') {
+      await disconnectCurrentServer();
+      if (mounted) {
+        setState(() => error = '网页端配置已更改，请从新的访问地址重新进入');
       }
-    } catch (e, stackTrace) {
-      ClientLog.error('realtime.websocket', e, stackTrace);
-      if (mounted && identical(socket, ws) && generation == socketGeneration) {
-        setState(() => error = 'WebSocket disconnected: $e');
-      }
-    } finally {
-      if (mounted && identical(socket, ws) && generation == socketGeneration) {
-        ClientLog.write(
-          'realtime.websocket',
-          'closed code=${ws.closeCode} reason=${ws.closeReason ?? ''}',
-        );
-        setState(() => wsConnected = false);
-        unawaited(reconnectWebSocketAfterDrop(ws, generation));
+      return false;
+    }
+    setState(() {
+      activity.insert(0, event);
+      if (activity.length > 80) activity.removeLast();
+    });
+    if (event.type.startsWith('voice.')) {
+      applyRealtimeVoiceEvent(event);
+    } else if (event.type.startsWith('user.') ||
+        event.type.startsWith('channel.presence_') ||
+        event.type.startsWith('channel.access_') ||
+        event.type == 'server.permissions_updated') {
+      scheduleRealtimeStateRefresh();
+    }
+    if (event.type == 'voice.state_changed' &&
+        event.fromUser == session?.user.id) {
+      final state = event.payload['state'];
+      if (state is Map<String, dynamic>) {
+        final forcedDeafened = state['deafened'] == true;
+        final forcedMuted = state['muted'] == true;
+        final screenShareAccepted = state['screen_sharing'] == true;
+        if (forcedDeafened && !voiceSession.snapshot.listenOff) {
+          await voiceSession.setListenOff(true);
+        } else if (forcedMuted && !voiceSession.snapshot.muted) {
+          await voiceSession.setMuted(true);
+        }
+        if (!screenShareAccepted && voiceSession.isScreenSharing) {
+          await voiceSession.stopScreenShare();
+        }
       }
     }
+    if (event.type == 'channel.message_created') {
+      handleChannelMessage(event);
+    }
+    if (event.type == 'channel.message_deleted') {
+      handleChannelMessageDeleted(event);
+    }
+    if (event.type == 'e2ee.envelope_created') {
+      handleChannelEnvelopeCreated(event);
+    }
+    if (event.type == 'e2ee.media_envelope_created') {
+      handleChannelEnvelopeCreated(event, media: true);
+    }
+    if (event.type == 'e2ee.key_requested') {
+      unawaited(handleChannelKeyRequest(event));
+    }
+    if (event.type == 'e2ee.media_key_requested') {
+      unawaited(handleChannelKeyRequest(event, media: true));
+    }
+    if (event.type == 'e2ee.media_key_activated') {
+      unawaited(handleVoiceMediaKeyActivated(event));
+    }
+    if (event.type == 'e2ee.media_key_fallback') {
+      unawaited(handleVoiceMediaKeyFallback(event));
+    }
+    if ((event.type == 'channel.access_granted' ||
+            event.type == 'channel.epoch_changed') &&
+        selectedServer?.encryptionMode == 'e2ee') {
+      unawaited(handleChannelEpochChanged(event));
+    }
+    if (event.type == 'direct.file_expired') {
+      handleDirectFileExpired(event);
+    }
+    if (event.type == 'direct.message_created') {
+      await handleDirectMessage(event);
+    }
+    if (event.type == 'direct.message_deleted') {
+      handleDirectMessageDeleted(event);
+    }
+    if (event.type == 'server.tls_enabled') {
+      final secureUrl = event.payload['secure_url'] as String? ?? '';
+      if (secureUrl.isNotEmpty) {
+        await persistSelectedConnectionUrl(secureUrl);
+        if (mounted) await login();
+      }
+      return false;
+    }
+    if (event.type == 'server.encryption_changed') {
+      final plainUrl = event.payload['plain_url'] as String? ?? '';
+      if (plainUrl.isNotEmpty) {
+        await persistSelectedConnectionUrl(plainUrl);
+      }
+      if (mounted) await login();
+      return false;
+    }
+    if (event.type == 'owner.credentials_revoked') {
+      final serverId = selectedServer?.id;
+      if (serverId != null) {
+        await ownerIdentity.deleteCredential(serverId);
+      }
+      if (mounted) {
+        setState(() => error = '本机的 owner 凭据已被服务端撤销');
+      }
+    }
+    if ((event.type == 'member.kicked' || event.type == 'member.banned') &&
+        event.fromUser == session?.user.id) {
+      final message = event.type == 'member.banned'
+          ? '你已被此服务器封禁'
+          : '你已被服务器管理员踢出';
+      await handleForcedServerDisconnect(message);
+      return false;
+    }
+    return true;
   }
 
   Future<void> restoreRealtimeConnection(
@@ -3327,23 +3306,18 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     await refreshServerState(generation: activeConnectionGeneration);
   }
 
-  Future<void> reconnectWebSocketAfterDrop(
-    WebSocketChannel droppedSocket,
-    int generation,
-  ) async {
+  Future<void> reconnectWebSocketAfterDrop(int generation) async {
     final connectionId = selectedConnection?.id;
     if (connectionId == null) return;
     var delay = const Duration(milliseconds: 500);
     while (mounted &&
-        identical(socket, droppedSocket) &&
-        generation == socketGeneration &&
-        !wsConnected &&
+        realtimeConnection.isCurrent(generation) &&
+        !realtimeConnection.connected &&
         selectedConnection?.id == connectionId) {
       await Future<void>.delayed(delay);
       if (!mounted ||
-          !identical(socket, droppedSocket) ||
-          generation != socketGeneration ||
-          wsConnected ||
+          !realtimeConnection.isCurrent(generation) ||
+          realtimeConnection.connected ||
           selectedConnection?.id != connectionId) {
         return;
       }
@@ -3380,11 +3354,11 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
           await login();
           return;
         }
-        await socket?.sink.close();
+        await realtimeConnection.closeForRetry();
       } catch (exception, stackTrace) {
         ClientLog.error('realtime.restore', exception, stackTrace);
-        if (!identical(socket, droppedSocket)) {
-          await socket?.sink.close();
+        if (!realtimeConnection.isCurrent(generation)) {
+          await realtimeConnection.closeForRetry();
         } else {
           try {
             await client.listServers(auth.token);
@@ -3406,7 +3380,10 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
           } catch (_) {}
         }
       }
-      if (wsConnected || !identical(socket, droppedSocket)) return;
+      if (realtimeConnection.connected ||
+          !realtimeConnection.isCurrent(generation)) {
+        return;
+      }
       delay = Duration(
         milliseconds: (delay.inMilliseconds * 2).clamp(500, 10000),
       );
@@ -4212,11 +4189,16 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   }
 
   Future<void> sendDirectMessage() async {
-    final ws = socket;
+    final realtimeGeneration = realtimeConnection.generation;
     final auth = session;
     final peer = selectedDirectUser();
     final body = messageController.text.trim();
-    if (ws == null || auth == null || peer == null || body.isEmpty) return;
+    if (!realtimeConnection.connected ||
+        auth == null ||
+        peer == null ||
+        body.isEmpty) {
+      return;
+    }
     if (!hasServerPermission('direct.send_text')) {
       setState(() => error = '当前账号没有发起私聊的权限');
       return;
@@ -4253,14 +4235,17 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
           'envelopes': prepared.envelopes,
         });
       }
-      ws.sink.add(
+      final sent = realtimeConnection.send(
         jsonEncode({
           'type': 'direct.message_send',
           'to_user': peer.userId,
           'payload': payload,
         }),
+        generation: realtimeGeneration,
       );
-      if (messageController.text.trim() == body) messageController.clear();
+      if (sent && messageController.text.trim() == body) {
+        messageController.clear();
+      }
     });
   }
 
@@ -4485,7 +4470,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   }
 
   void retractDirectMessage(DirectMessage message) {
-    socket?.sink.add(
+    realtimeConnection.send(
       jsonEncode({
         'type': 'direct.message_delete',
         'payload': {'message_id': message.id},
@@ -10175,7 +10160,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                   ? chatAvatarUriForUser(session!.user.id)
                   : null,
               avatarToken: kIsWeb ? session?.token : null,
-              online: wsConnected,
+              online: realtimeConnection.connected,
               muted: voiceSession.snapshot.muted,
               canSpeak:
                   hasServerPermission('voice.speak') &&
