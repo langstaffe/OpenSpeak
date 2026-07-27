@@ -35,6 +35,7 @@ import 'audio_attachment_metadata.dart';
 import 'audio_device_monitor.dart';
 import 'audio_playback_controller.dart';
 import 'browser_actions.dart';
+import 'client_audio_preferences.dart';
 import 'client_link_preview.dart';
 import 'client_log.dart';
 import 'device_identity_service.dart';
@@ -115,16 +116,6 @@ bool webLoginNeedsPasswordPrompt(Object error, {required bool isWeb}) =>
 
 const savedConnectionsKey = 'openspeak.savedConnections.v1';
 const clientInstallationIdKey = 'openspeak.clientInstallationId.v1';
-const audioInputDeviceKey = 'openspeak.audioInputDeviceId.v1';
-const audioOutputDeviceKey = 'openspeak.audioOutputDeviceId.v1';
-const audioInputVolumeKey = 'openspeak.audioInputVolume.v1';
-const audioOutputVolumeKey = 'openspeak.audioOutputVolume.v1';
-const soundEffectVolumeKey = 'openspeak.soundEffectVolume.v1';
-const microphoneActivationModeKey = 'openspeak.microphoneActivationMode.v1';
-const microphoneThresholdKey = 'openspeak.microphoneThreshold.v1';
-const microphonePushToTalkHotkeyKey = 'openspeak.microphonePushToTalkHotkey.v1';
-const noiseSuppressionEnabledKey = 'openspeak.noiseSuppressionEnabled.v1';
-const memberOutputVolumesKey = 'openspeak.memberOutputVolumes.v1';
 const webAuthSessionStorageKey = 'openspeak.webAuthSession.v1';
 
 class LatestChannelJoinQueue {
@@ -735,6 +726,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   final ownerIdentity = OwnerIdentityService();
   final deviceIdentity = DeviceIdentityService();
   final localProfileService = LocalProfileService();
+  final audioPreferences = ClientAudioPreferences();
   final pushToTalkHotkey = GlobalPushToTalkHotkey();
 
   OpenSpeakApi? api;
@@ -1486,54 +1478,25 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   }
 
   Future<void> loadAudioDevicePreferences() async {
-    final prefs = await SharedPreferences.getInstance();
-    final input = prefs.getString(audioInputDeviceKey);
-    final output = prefs.getString(audioOutputDeviceKey);
-    audioInputVolume = (prefs.getDouble(audioInputVolumeKey) ?? 1.0)
-        .clamp(0.0, 1.0)
-        .toDouble();
-    audioOutputVolume = (prefs.getDouble(audioOutputVolumeKey) ?? 1.0)
-        .clamp(0.0, 1.0)
-        .toDouble();
-    soundEffectVolume = (prefs.getDouble(soundEffectVolumeKey) ?? 1.0)
-        .clamp(0.0, 1.0)
-        .toDouble();
+    final preferences = await audioPreferences.load();
+    audioInputVolume = preferences.inputVolume;
+    audioOutputVolume = preferences.outputVolume;
+    soundEffectVolume = preferences.soundEffectVolume;
     soundEffects.volume = soundEffectVolume;
-    noiseSuppressionEnabled = prefs.getBool(noiseSuppressionEnabledKey) ?? true;
-    final savedActivationMode = MicrophoneActivationModeValue.parse(
-      prefs.getString(microphoneActivationModeKey),
-    );
-    microphoneActivationMode = microphoneActivationModeForPlatform(
-      savedActivationMode,
-    );
-    if (microphoneActivationMode != savedActivationMode) {
-      await prefs.setString(
-        microphoneActivationModeKey,
-        microphoneActivationMode.preferenceValue,
-      );
-    }
-    microphoneThreshold = (prefs.getDouble(microphoneThresholdKey) ?? 0.4)
-        .clamp(0.0, 1.0)
-        .toDouble();
-    final hotkeyValue = prefs.getString(microphonePushToTalkHotkeyKey);
-    if (hotkeyValue != null && hotkeyValue.isNotEmpty) {
-      try {
-        microphonePushToTalkHotkey = MicrophoneHotkeyBinding.fromJson(
-          jsonDecode(hotkeyValue),
-        );
-      } catch (_) {
-        microphonePushToTalkHotkey = null;
-      }
-    }
-    final savedInput = input?.trim().isEmpty == true ? null : input;
-    final savedOutput = output?.trim().isEmpty == true ? null : output;
+    noiseSuppressionEnabled = preferences.noiseSuppressionEnabled;
+    microphoneActivationMode = preferences.activationMode;
+    microphoneThreshold = preferences.microphoneThreshold;
+    microphonePushToTalkHotkey = preferences.pushToTalkHotkey;
     final selection = audioDeviceMonitor.hasLoaded
         ? audioDeviceSelectionAfterRefresh(
-            inputDeviceId: savedInput,
-            outputDeviceId: savedOutput,
+            inputDeviceId: preferences.inputDeviceId,
+            outputDeviceId: preferences.outputDeviceId,
             devices: audioDeviceMonitor.devices,
           )
-        : (inputDeviceId: savedInput, outputDeviceId: savedOutput);
+        : (
+            inputDeviceId: preferences.inputDeviceId,
+            outputDeviceId: preferences.outputDeviceId,
+          );
     selectedAudioInputDeviceId = selection.inputDeviceId;
     selectedAudioOutputDeviceId = selection.outputDeviceId;
     await voiceSession.configureAudioDevices(
@@ -1565,18 +1528,8 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   }
 
   Future<void> loadMemberOutputVolumes() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(memberOutputVolumesKey);
-    if (raw == null || raw.trim().isEmpty) return;
-    final decoded = jsonDecode(raw);
-    if (decoded is! Map) return;
-    final loaded = <String, double>{};
-    for (final entry in decoded.entries) {
-      final value = entry.value;
-      if (value is! num) continue;
-      final volume = value.toDouble().clamp(0.0, 2.0).toDouble();
-      if (volume != 1.0) loaded['${entry.key}'] = volume;
-    }
+    final loaded = await audioPreferences.loadMemberOutputVolumes();
+    if (loaded == null) return;
     memberOutputVolumes
       ..clear()
       ..addAll(loaded);
@@ -1602,27 +1555,14 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   }
 
   Future<void> persistMemberOutputVolumes() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      memberOutputVolumesKey,
-      jsonEncode(memberOutputVolumes),
-    );
+    await audioPreferences.saveMemberOutputVolumes(memberOutputVolumes);
   }
 
   Future<void> persistAudioDevicePreferences() async {
-    final prefs = await SharedPreferences.getInstance();
-    final input = selectedAudioInputDeviceId;
-    final output = selectedAudioOutputDeviceId;
-    if (input == null || input.isEmpty) {
-      await prefs.remove(audioInputDeviceKey);
-    } else {
-      await prefs.setString(audioInputDeviceKey, input);
-    }
-    if (output == null || output.isEmpty) {
-      await prefs.remove(audioOutputDeviceKey);
-    } else {
-      await prefs.setString(audioOutputDeviceKey, output);
-    }
+    await audioPreferences.saveDeviceSelection(
+      inputDeviceId: selectedAudioInputDeviceId,
+      outputDeviceId: selectedAudioOutputDeviceId,
+    );
   }
 
   Future<void> setAudioInputVolume(double value) async {
@@ -1634,8 +1574,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     } else if (next > 0 && voiceSession.snapshot.muted) {
       muteChange = setMuted(false);
     }
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble(audioInputVolumeKey, next);
+    await audioPreferences.saveInputVolume(next);
     await muteChange;
   }
 
@@ -1649,8 +1588,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       listenChange = setListenOff(false);
     }
     final volumeChange = voiceSession.setOutputVolume(next);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setDouble(audioOutputVolumeKey, next);
+    await audioPreferences.saveOutputVolume(next);
     await volumeChange;
     await listenChange;
   }
@@ -1661,8 +1599,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     setState(() => noiseSuppressionEnabled = next);
     try {
       await voiceSession.setNoiseSuppressionEnabled(next);
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool(noiseSuppressionEnabledKey, next);
+      await audioPreferences.saveNoiseSuppression(next);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -7790,22 +7727,13 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       soundEffects.volume = soundEffectVolume;
     });
     return runGuarded(() async {
-      final prefs = await SharedPreferences.getInstance();
       await persistAudioDevicePreferences();
-      await prefs.setString(
-        microphoneActivationModeKey,
-        effectiveActivationMode.preferenceValue,
+      await audioPreferences.saveAudioSettings(
+        activationMode: effectiveActivationMode,
+        microphoneThreshold: microphoneThreshold,
+        pushToTalkHotkey: pushToTalkHotkeyBinding,
+        soundEffectVolume: soundEffectVolume,
       );
-      await prefs.setDouble(microphoneThresholdKey, microphoneThreshold);
-      await prefs.setDouble(soundEffectVolumeKey, soundEffectVolume);
-      if (pushToTalkHotkeyBinding == null) {
-        await prefs.remove(microphonePushToTalkHotkeyKey);
-      } else {
-        await prefs.setString(
-          microphonePushToTalkHotkeyKey,
-          jsonEncode(pushToTalkHotkeyBinding.toJson()),
-        );
-      }
       await voiceSession.configureAudioDevices(
         inputDeviceId: inputDeviceId,
         outputDeviceId: outputDeviceId,
