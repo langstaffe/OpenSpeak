@@ -14,6 +14,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart' as rtc;
 import 'package:http/http.dart' as http;
 import 'package:livekit_client/livekit_client.dart' as lk;
 import 'package:openspeak_flutter/attachment_transfer_controller.dart';
+import 'package:openspeak_flutter/audio_stream_proxy.dart';
 import 'package:openspeak_flutter/browser_actions.dart';
 import 'package:openspeak_flutter/client_log.dart';
 import 'package:openspeak_flutter/device_identity_service.dart';
