@@ -16299,7 +16299,7 @@ class ImageLightbox extends StatelessWidget {
                     child: Image.memory(
                       bytes,
                       fit: BoxFit.contain,
-                      filterQuality: FilterQuality.high,
+                      filterQuality: FilterQuality.medium,
                       errorBuilder: (_, _, _) => const Center(
                         child: Text(
                           '图片预览失败',

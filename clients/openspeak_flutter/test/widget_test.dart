@@ -2658,6 +2658,10 @@ void main() {
         Clip.antiAlias,
       );
       expect(
+        tester.widget<Image>(find.byType(Image)).filterQuality,
+        FilterQuality.medium,
+      );
+      expect(
         tester.getSize(find.byType(InteractiveViewer)),
         const Size(768, 568),
       );
