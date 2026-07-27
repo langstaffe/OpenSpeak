@@ -31,6 +31,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'attachment_cache_service.dart';
+import 'attachment_transfer_controller.dart';
 import 'browser_actions.dart';
 import 'client_log.dart';
 import 'device_identity_service.dart';
@@ -1341,14 +1342,12 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   final channelMentionCounts = <String, int>{};
   final directUnreadCounts = <String, int>{};
   final expiredDirectFileIds = <String>{};
-  final downloadTasks = <String, TransferTask>{};
+  final attachmentTransfers = AttachmentTransferController();
   final localAttachmentSources = <String, File>{};
   final imagePreviewFutures = <String, Future<CachedImagePreview>>{};
   final linkPreviewFutures = <String, Future<LinkPreview?>>{};
   final audioMetadataFutures = <String, Future<AudioAttachmentMetadata>>{};
   final pendingLocalUploads = <String>{};
-  final uploadTasks = <TransferTask>[];
-  bool uploadQueueRunning = false;
   List<SavedServerConnection> savedConnections = [];
   SavedServerConnection? selectedConnection;
   String localDisplayName = 'user';
@@ -1466,6 +1465,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
 
   @override
   void dispose() {
+    attachmentTransfers.cancelAndClear();
     socket?.sink.close();
     realtimeStateRefreshTimer?.cancel();
     resetChannelKeyCoordination();
@@ -1993,9 +1993,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     voiceSession.stopServerLatencyMonitor();
     await closingSocket?.sink.close();
     if (!mounted) return;
-    for (final task in uploadTasks) {
-      task.cancelToken.cancel();
-    }
+    attachmentTransfers.cancelAndClear();
     setState(() {
       session = null;
       api = null;
@@ -2017,8 +2015,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       channelUnreadCounts.clear();
       channelMentionCounts.clear();
       directUnreadCounts.clear();
-      uploadTasks.clear();
-      uploadQueueRunning = false;
       currentChatNewMessages = 0;
       localAttachmentSources.clear();
       imagePreviewFutures.clear();
@@ -2596,11 +2592,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       linkPreviewFutures.clear();
       audioMetadataFutures.clear();
       pendingLocalUploads.clear();
-      for (final task in uploadTasks) {
-        task.cancelToken.cancel();
-      }
-      uploadTasks.clear();
-      uploadQueueRunning = false;
+      attachmentTransfers.cancelAndClear();
       presence = PresenceSnapshot.empty(serverId: server.id);
       currentServerRole = 'user';
       currentServerPermissions = <String>{};
@@ -4463,7 +4455,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     if (fileId.isEmpty) return;
     setState(() {
       expiredDirectFileIds.add(fileId);
-      downloadTasks.remove(fileId);
+      attachmentTransfers.cancelDownload(fileId);
     });
   }
 
@@ -4554,7 +4546,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     if (files.isEmpty) return;
     setState(() {
       for (final file in files) {
-        uploadTasks.add(
+        attachmentTransfers.uploads.add(
           TransferTask.upload(
             file: file,
             direct: direct,
@@ -4567,48 +4559,22 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     unawaited(processUploadQueue());
   }
 
-  Future<void> processUploadQueue() async {
-    if (uploadQueueRunning) return;
-    uploadQueueRunning = true;
-    try {
-      while (mounted) {
-        final task = uploadTasks
-            .where((item) => item.status == TransferStatus.queued)
-            .firstOrNull;
-        if (task == null) return;
-        setState(() => task.status = TransferStatus.running);
-        try {
-          if (task.direct) {
-            await uploadDirectAttachment(task);
-          } else {
-            await uploadChannelAttachment(task);
-          }
-          unawaited(soundEffects.play(SoundEffect.messageSend));
-          if (mounted) setState(() => uploadTasks.remove(task));
-        } catch (e) {
-          if (!mounted) return;
-          if (!task.cancelToken.isCancelled) {
-            unawaited(soundEffects.play(SoundEffect.error));
-          }
-          setState(() {
-            if (task.cancelToken.isCancelled) {
-              uploadTasks.remove(task);
-            } else {
-              task.status = TransferStatus.failed;
-              task.error = '$e';
-              error = '$e';
-            }
-          });
-        }
-      }
-    } finally {
-      uploadQueueRunning = false;
-      if (mounted &&
-          uploadTasks.any((task) => task.status == TransferStatus.queued)) {
-        unawaited(processUploadQueue());
-      }
-    }
-  }
+  Future<void> processUploadQueue() => attachmentTransfers.processUploads(
+    upload: (task) => task.direct
+        ? uploadDirectAttachment(task)
+        : uploadChannelAttachment(task),
+    onChanged: () {
+      if (mounted) setState(() {});
+    },
+    onCompleted: (_) {
+      if (mounted) unawaited(soundEffects.play(SoundEffect.messageSend));
+    },
+    onFailed: (_, exception) {
+      if (!mounted) return;
+      error = '$exception';
+      unawaited(soundEffects.play(SoundEffect.error));
+    },
+  );
 
   Future<XFile?> fileFromSelection(XFile? selected) async {
     if (selected == null) return null;
@@ -4695,8 +4661,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                 epochId: state.epoch.id,
                 checkCancelled: () =>
                     task.cancelToken.throwIfCancelled('上传已取消'),
-                onProgress: (done, total) =>
-                    updateTransferProgress(task, done ~/ 5, total),
               );
               uploadFile = XFile.fromData(encrypted.bytes, name: 'payload');
               encryptedNonce = encrypted.nonce;
@@ -4712,8 +4676,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                 epochId: state.epoch.id,
                 checkCancelled: () =>
                     task.cancelToken.throwIfCancelled('上传已取消'),
-                onProgress: (done, total) =>
-                    updateTransferProgress(task, done ~/ 5, total),
               );
               uploadFile = XFile(encrypted.file.path);
               encryptedNonce = encrypted.nonce;
@@ -4723,14 +4685,8 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
             format = attachmentEncryptionFormatV1;
             chunkSize = attachmentEncryptionChunkSize;
           }
-          final uploadLength = await uploadFile.length();
-          void uploadProgress(int sent, int _) => updateTransferProgress(
-            task,
-            mode == 'e2ee' && uploadLength > 0
-                ? fileLength ~/ 5 + (sent * fileLength ~/ uploadLength) * 4 ~/ 5
-                : sent,
-            fileLength,
-          );
+          void uploadProgress(int sent, int total) =>
+              updateTransferProgress(task, sent, total);
           return await (task.image
               ? client.uploadChannelImage(
                   auth.token,
@@ -4865,8 +4821,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
             channelId: scope,
             epochId: prepared.messageId,
             checkCancelled: () => task.cancelToken.throwIfCancelled('上传已取消'),
-            onProgress: (done, total) =>
-                updateTransferProgress(task, done ~/ 5, total),
           );
           uploadFile = XFile.fromData(encrypted.bytes, name: 'payload');
           encryptedNonce = encrypted.nonce;
@@ -4881,8 +4835,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
             channelId: scope,
             epochId: prepared.messageId,
             checkCancelled: () => task.cancelToken.throwIfCancelled('上传已取消'),
-            onProgress: (done, total) =>
-                updateTransferProgress(task, done ~/ 5, total),
           );
           uploadFile = XFile(encrypted.file.path);
           encryptedNonce = encrypted.nonce;
@@ -4894,7 +4846,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         chunkSize = attachmentEncryptionChunkSize;
         envelopes = prepared.envelopes;
       }
-      final uploadLength = await uploadFile.length();
       directFile = await client.uploadDirectFile(
         auth.token,
         task.targetId,
@@ -4909,13 +4860,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         attachmentFormat: format,
         chunkSize: chunkSize,
         directEnvelopes: envelopes,
-        onProgress: (sent, _) => updateTransferProgress(
-          task,
-          mode == 'e2ee' && uploadLength > 0
-              ? fileLength ~/ 5 + (sent * fileLength ~/ uploadLength) * 4 ~/ 5
-              : sent,
-          fileLength,
-        ),
+        onProgress: (sent, total) => updateTransferProgress(task, sent, total),
         cancelToken: task.cancelToken,
       );
     } catch (_) {
@@ -4942,12 +4887,9 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
 
   void updateTransferProgress(TransferTask task, int transferred, int total) {
     if (!mounted) return;
-    setState(() {
-      task.transferredBytes = transferred;
-      if (total > 0) {
-        task.totalBytes = total;
-      }
-    });
+    setState(
+      () => attachmentTransfers.updateProgress(task, transferred, total),
+    );
   }
 
   String createLocalAttachmentId() {
@@ -5079,10 +5021,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   }
 
   void cancelUpload(TransferTask task) {
-    task.cancelToken.cancel();
-    if (task.status != TransferStatus.running) {
-      setState(() => uploadTasks.remove(task));
-    }
+    setState(() => attachmentTransfers.cancelUpload(task));
   }
 
   Future<void> retryUpload(TransferTask task) async {
@@ -5095,12 +5034,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       });
       return;
     }
-    setState(() {
-      task.cancelToken = TransferCancelToken();
-      task.status = TransferStatus.queued;
-      task.transferredBytes = 0;
-      task.error = null;
-    });
+    setState(() => attachmentTransfers.retryUpload(task));
     await processUploadQueue();
   }
 
@@ -5336,7 +5270,8 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         attachment,
         onProgress: (done, total) =>
             updateDownloadProgress(attachment.fileId, done, total),
-        cancelToken: downloadTasks[attachment.fileId]?.cancelToken,
+        cancelToken:
+            attachmentTransfers.downloads[attachment.fileId]?.cancelToken,
       );
       await openDownloadedFile(file);
     });
@@ -5358,7 +5293,8 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         attachment,
         onProgress: (done, total) =>
             updateDownloadProgress(attachment.fileId, done, total),
-        cancelToken: downloadTasks[attachment.fileId]?.cancelToken,
+        cancelToken:
+            attachmentTransfers.downloads[attachment.fileId]?.cancelToken,
       );
       await cached.copy(destination.path);
     });
@@ -5370,7 +5306,8 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         attachment,
         onProgress: (done, total) =>
             updateDownloadProgress(attachment.fileId, done, total),
-        cancelToken: downloadTasks[attachment.fileId]?.cancelToken,
+        cancelToken:
+            attachmentTransfers.downloads[attachment.fileId]?.cancelToken,
       );
       downloadBrowserBytes(
         bytes,
@@ -5403,26 +5340,26 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       return;
     }
     final task = TransferTask.download(attachment: attachment);
-    setState(() => downloadTasks[attachment.fileId] = task);
+    setState(() => attachmentTransfers.downloads[attachment.fileId] = task);
     try {
       await action();
       if (!mounted) return;
-      setState(() => downloadTasks.remove(attachment.fileId));
+      setState(() => attachmentTransfers.downloads.remove(attachment.fileId));
     } catch (e) {
       if (!mounted) return;
       if (task.cancelToken.isCancelled) {
-        setState(() => downloadTasks.remove(attachment.fileId));
+        setState(() => attachmentTransfers.downloads.remove(attachment.fileId));
         return;
       }
       setState(() {
         if (attachment.direct && isDirectFileExpiredError(e)) {
           expiredDirectFileIds.add(attachment.fileId);
-          downloadTasks.remove(attachment.fileId);
+          attachmentTransfers.downloads.remove(attachment.fileId);
           error = '文件已过期';
         } else {
           task.status = TransferStatus.failed;
           task.error = '$e';
-          downloadTasks[attachment.fileId] = task;
+          attachmentTransfers.downloads[attachment.fileId] = task;
           error = '$e';
         }
       });
@@ -5431,19 +5368,16 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
 
   void updateDownloadProgress(String fileId, int transferred, int total) {
     if (!mounted) return;
-    final task = downloadTasks[fileId];
+    final task = attachmentTransfers.downloads[fileId];
     if (task == null) return;
-    setState(() {
-      task.transferredBytes = transferred;
-      task.totalBytes = total;
-    });
+    setState(
+      () => attachmentTransfers.updateProgress(task, transferred, total),
+    );
   }
 
   void cancelDownload(ChatAttachment attachment) {
-    final task = downloadTasks[attachment.fileId];
-    if (task == null) return;
-    task.cancelToken.cancel();
-    setState(() => downloadTasks.remove(attachment.fileId));
+    if (!attachmentTransfers.downloads.containsKey(attachment.fileId)) return;
+    setState(() => attachmentTransfers.cancelDownload(attachment.fileId));
   }
 
   Future<LinkPreview?>? loadLinkPreviewForBody(String body) {
@@ -10430,9 +10364,9 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
               },
             ),
           ),
-          if (uploadTasks.isNotEmpty)
+          if (attachmentTransfers.uploads.isNotEmpty)
             UploadQueuePanel(
-              tasks: uploadTasks,
+              tasks: attachmentTransfers.uploads,
               onCancel: cancelUpload,
               onRetry: (task) => unawaited(retryUpload(task)),
             ),
@@ -10533,7 +10467,8 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                       onOpen: openAttachment,
                       onSaveAs: saveAttachmentAs,
                       onOpenLink: openExternalUrl,
-                      downloadTask: downloadTasks[attachment?.fileId],
+                      downloadTask:
+                          attachmentTransfers.downloads[attachment?.fileId],
                       onCancelDownload: cancelDownload,
                       activeAudioFileId: activeAudioFileId,
                       audioLoadingFileId: loadingAudioFileId,
@@ -10645,7 +10580,8 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                     onOpen: openAttachment,
                     onSaveAs: saveAttachmentAs,
                     onOpenLink: openExternalUrl,
-                    downloadTask: downloadTasks[attachment?.fileId],
+                    downloadTask:
+                        attachmentTransfers.downloads[attachment?.fileId],
                     onCancelDownload: cancelDownload,
                     activeAudioFileId: activeAudioFileId,
                     audioLoadingFileId: loadingAudioFileId,
@@ -14891,48 +14827,6 @@ class DirectMessage {
   );
 }
 
-class ChatAttachment {
-  ChatAttachment({
-    required this.direct,
-    this.channelId = '',
-    required this.kind,
-    required this.fileId,
-    required this.originalName,
-    required this.contentType,
-    required this.sizeBytes,
-    this.ciphertextSizeBytes = 0,
-    this.encryptionMode = 'none',
-    this.epochId = '',
-    this.nonce = '',
-    this.attachmentFormat = '',
-    required this.expiresAt,
-    required this.expired,
-  });
-
-  final bool direct;
-  final String channelId;
-  final String kind;
-  final String fileId;
-  final String originalName;
-  final String contentType;
-  final int sizeBytes;
-  final int ciphertextSizeBytes;
-  final String encryptionMode;
-  final String epochId;
-  final String nonce;
-  final String attachmentFormat;
-  final DateTime? expiresAt;
-  final bool expired;
-
-  String get displayName => originalName.trim().isEmpty ? fileId : originalName;
-
-  bool get isImage => isImageContent(contentType, originalName);
-
-  bool get isAudio => isAudioContent(contentType, originalName);
-
-  bool get encrypted => encryptionMode == 'e2ee';
-}
-
 class AudioStreamProxy {
   HttpServer? _server;
   var _nextId = 0;
@@ -16965,69 +16859,6 @@ class ImagePreviewFailure extends StatelessWidget {
   }
 }
 
-enum TransferStatus { queued, running, failed }
-
-class TransferTask {
-  TransferTask._({
-    required this.file,
-    required this.fileName,
-    required this.direct,
-    required this.targetId,
-    required this.image,
-    required this.cancelToken,
-    required this.status,
-    this.attachment,
-  });
-
-  factory TransferTask.upload({
-    required XFile file,
-    required bool direct,
-    required String targetId,
-    required bool image,
-  }) {
-    final name = file.name.isEmpty ? 'upload' : file.name;
-    return TransferTask._(
-      file: file,
-      fileName: name,
-      direct: direct,
-      targetId: targetId,
-      image: image,
-      cancelToken: TransferCancelToken(),
-      status: TransferStatus.queued,
-    );
-  }
-
-  factory TransferTask.download({required ChatAttachment attachment}) {
-    return TransferTask._(
-      file: XFile.fromData(Uint8List(0), name: attachment.displayName),
-      fileName: attachment.displayName,
-      direct: attachment.direct,
-      targetId: attachment.fileId,
-      image: attachment.isImage,
-      cancelToken: TransferCancelToken(),
-      status: TransferStatus.running,
-      attachment: attachment,
-    );
-  }
-
-  final XFile file;
-  final String fileName;
-  final bool direct;
-  final String targetId;
-  final bool image;
-  TransferCancelToken cancelToken;
-  final ChatAttachment? attachment;
-  TransferStatus status;
-  int transferredBytes = 0;
-  int totalBytes = 0;
-  String? error;
-
-  double? get progress {
-    if (totalBytes <= 0) return null;
-    return (transferredBytes / totalBytes).clamp(0, 1);
-  }
-}
-
 class UploadQueuePanel extends StatelessWidget {
   const UploadQueuePanel({
     super.key,
@@ -17360,77 +17191,6 @@ String localDateLabel(DateTime value) {
   final local = value.toLocal();
   String two(int n) => n.toString().padLeft(2, '0');
   return '${local.year}年${two(local.month)}月${two(local.day)}日';
-}
-
-String readableBytes(int value) {
-  if (value <= 0) return '';
-  const units = ['B', 'KB', 'MB', 'GB'];
-  var size = value.toDouble();
-  var unit = 0;
-  while (size >= 1024 && unit < units.length - 1) {
-    size /= 1024;
-    unit += 1;
-  }
-  final digits = unit == 0 || size >= 10 ? 0 : 1;
-  return '${size.toStringAsFixed(digits)} ${units[unit]}';
-}
-
-bool isImageContent(String contentType, String name) {
-  if (contentType.toLowerCase().startsWith('image/')) return true;
-  final lower = name.toLowerCase();
-  return lower.endsWith('.png') ||
-      lower.endsWith('.jpg') ||
-      lower.endsWith('.jpeg') ||
-      lower.endsWith('.webp') ||
-      lower.endsWith('.gif') ||
-      lower.endsWith('.bmp') ||
-      lower.endsWith('.heic') ||
-      lower.endsWith('.heif') ||
-      lower.endsWith('.svg');
-}
-
-bool isAudioContent(String contentType, String name) {
-  if (contentType.toLowerCase().startsWith('audio/')) return true;
-  final lower = normalizedExtensionName(name);
-  return lower.endsWith('.mp3') ||
-      lower.endsWith('.m4a') ||
-      lower.endsWith('.aac') ||
-      lower.endsWith('.flac') ||
-      lower.endsWith('.wav') ||
-      lower.endsWith('.ogg') ||
-      lower.endsWith('.opus') ||
-      lower.endsWith('.wma');
-}
-
-String attachmentContentType(String contentType, String name) {
-  final normalized = contentType.trim();
-  return normalized.isEmpty ||
-          normalized.toLowerCase().split(';').first.trim() ==
-              'application/octet-stream'
-      ? contentTypeForPath(name)
-      : normalized;
-}
-
-String normalizedExtensionName(String name) {
-  var value = name.trim().toLowerCase();
-  try {
-    value = Uri.decodeFull(value);
-  } catch (_) {
-    // Keep the original value if a filename contains malformed percent escapes.
-  }
-  final queryIndex = value.indexOf('?');
-  if (queryIndex >= 0) {
-    value = value.substring(0, queryIndex);
-  }
-  final fragmentIndex = value.indexOf('#');
-  if (fragmentIndex >= 0) {
-    value = value.substring(0, fragmentIndex);
-  }
-  while (value.isNotEmpty &&
-      ' \t\r\n.,;:!?)，。；：！？）"\''.contains(value[value.length - 1])) {
-    value = value.substring(0, value.length - 1);
-  }
-  return value;
 }
 
 String? firstPreviewableUrl(String body) {

@@ -1609,12 +1609,14 @@ class OpenSpeakApi {
       final responseFuture = client.send(request);
       var sent = 0;
       onProgress?.call(0, length);
-      await for (final chunk in file.openRead()) {
-        cancelToken?.throwIfCancelled('上传已取消');
-        request.sink.add(chunk);
-        sent += chunk.length;
-        onProgress?.call(sent, length);
-      }
+      await request.sink.addStream(
+        file.openRead().map((chunk) {
+          cancelToken?.throwIfCancelled('上传已取消');
+          sent += chunk.length;
+          onProgress?.call(sent, length);
+          return chunk;
+        }),
+      );
       await request.sink.close();
       final response = await http.Response.fromStream(await responseFuture);
       if (response.statusCode < 200 || response.statusCode >= 300) {

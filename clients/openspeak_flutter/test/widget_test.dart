@@ -13,6 +13,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart' as rtc;
 import 'package:http/http.dart' as http;
 import 'package:livekit_client/livekit_client.dart' as lk;
+import 'package:openspeak_flutter/attachment_transfer_controller.dart';
 import 'package:openspeak_flutter/browser_actions.dart';
 import 'package:openspeak_flutter/client_log.dart';
 import 'package:openspeak_flutter/device_identity_service.dart';
@@ -564,6 +565,77 @@ void main() {
     expect(find.text('first.png'), findsOneWidget);
     expect(find.text('second.txt'), findsOneWidget);
     expect(find.text('等待上传'), findsNWidgets(2));
+  });
+
+  test('attachment transfer controller keeps network byte progress exact', () {
+    final controller = AttachmentTransferController();
+    final upload = TransferTask.upload(
+      file: XFile('/tmp/upload.bin'),
+      direct: false,
+      targetId: 'channel',
+      image: false,
+    );
+    final download = TransferTask.download(
+      attachment: ChatAttachment(
+        direct: false,
+        kind: 'file',
+        fileId: 'file',
+        originalName: 'download.bin',
+        contentType: 'application/octet-stream',
+        sizeBytes: 11,
+        expiresAt: null,
+        expired: false,
+      ),
+    );
+    controller.uploads.add(upload);
+    controller.downloads['file'] = download;
+
+    controller.updateProgress(upload, 7, 11);
+
+    expect(controller.nextQueuedUpload, same(upload));
+    expect(upload.transferredBytes, 7);
+    expect(upload.totalBytes, 11);
+    expect(upload.progress, closeTo(7 / 11, 0.0001));
+
+    controller.cancelAndClear();
+
+    expect(upload.cancelToken.isCancelled, isTrue);
+    expect(download.cancelToken.isCancelled, isTrue);
+    expect(controller.uploads, isEmpty);
+    expect(controller.downloads, isEmpty);
+  });
+
+  test('attachment transfer controller processes uploads serially', () async {
+    TransferTask task(String name) => TransferTask.upload(
+      file: XFile('/tmp/$name'),
+      direct: false,
+      targetId: 'channel',
+      image: false,
+    );
+
+    final controller = AttachmentTransferController();
+    final first = task('first');
+    final second = task('second');
+    controller.uploads.addAll([first, second]);
+    final processed = <String>[];
+
+    await controller.processUploads(
+      upload: (task) async {
+        processed.add(task.fileName);
+        if (identical(task, second)) throw StateError('failed');
+      },
+      onChanged: () {},
+    );
+
+    expect(processed, ['first', 'second']);
+    expect(controller.uploads, [second]);
+    expect(second.status, TransferStatus.failed);
+
+    controller.updateProgress(second, 7, 11);
+    controller.retryUpload(second);
+    expect((second.transferredBytes, second.totalBytes), (0, 0));
+    await controller.processUploads(upload: (_) async {}, onChanged: () {});
+    expect(controller.uploads, isEmpty);
   });
 
   test('direct messages only expose retract for the sender', () {
