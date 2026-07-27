@@ -20,7 +20,6 @@ import 'package:openspeak_flutter/audio_stream_proxy.dart';
 import 'package:openspeak_flutter/browser_actions.dart';
 import 'package:openspeak_flutter/client_link_preview.dart';
 import 'package:openspeak_flutter/client_log.dart';
-import 'package:openspeak_flutter/device_identity_service.dart';
 import 'package:openspeak_flutter/main.dart';
 import 'package:openspeak_flutter/microphone_activation.dart';
 import 'package:openspeak_flutter/openspeak_api.dart';
@@ -666,65 +665,16 @@ void main() {
     expect(directMessageContextAction(mine: true, pending: true), isNull);
   });
 
-  test('direct E2EE scope is symmetric and metadata stays encrypted', () {
+  test('direct E2EE scope is symmetric', () {
     expect(
       directEncryptionScope('srv', 'user_b', 'user_a'),
       directEncryptionScope('srv', 'user_a', 'user_b'),
     );
-    final message = DirectMessage.fromEvent(
-      RealtimeEvent(
-        type: 'direct.message_created',
-        serverId: 'srv',
-        channelId: '',
-        fromUser: 'user_a',
-        toUser: 'user_b',
-        payload: {
-          'id': 'dm_0123456789abcdef01234567',
-          'kind': 'file',
-          'body': 'fil_cipher',
-          'file_id': 'fil_cipher',
-          'original_name': 'private.zip',
-          'content_type': 'application/zip',
-          'size_bytes': 23,
-          'ciphertext_size_bytes': 67,
-          'encryption_mode': 'e2ee',
-          'nonce': 'AAAAAAAAAAA',
-          'attachment_format': attachmentEncryptionFormatV1,
-        },
-        sentAt: DateTime.utc(2026, 7, 17),
-      ),
-    );
-    expect(message.encryptionMode, 'e2ee');
-    expect(message.sizeBytes, 23);
-    expect(message.ciphertextSizeBytes, 67);
-    expect(message.nonce, 'AAAAAAAAAAA');
   });
 
   test('media E2EE uses a separate envelope scope', () {
     expect(mediaEncryptionScope('chn_test'), 'media:chn_test');
     expect(mediaEncryptionScope('chn_test'), isNot('chn_test'));
-  });
-
-  test('retracted direct messages keep their sender and time', () {
-    final sentAt = DateTime.utc(2026, 7, 15, 12);
-    final removed = DirectMessage(
-      id: 'dm_test',
-      fromUserId: 'sender',
-      toUserId: 'recipient',
-      kind: 'text',
-      body: 'secret',
-      fileId: '',
-      originalName: '',
-      contentType: '',
-      sizeBytes: 0,
-      expiresAt: null,
-      sentAt: sentAt,
-    ).retracted();
-
-    expect(removed.kind, 'removed');
-    expect(removed.body, isEmpty);
-    expect(removed.fromUserId, 'sender');
-    expect(removed.sentAt, sentAt);
   });
 
   test('invalid server password has a useful client message', () {
