@@ -38,6 +38,7 @@ import 'browser_actions.dart';
 import 'client_link_preview.dart';
 import 'client_log.dart';
 import 'device_identity_service.dart';
+import 'local_profile_service.dart';
 import 'microphone_activation.dart';
 import 'openspeak_api.dart';
 import 'owner_identity_service.dart';
@@ -113,9 +114,6 @@ bool webLoginNeedsPasswordPrompt(Object error, {required bool isWeb}) =>
     error.code == 'invalid_server_password';
 
 const savedConnectionsKey = 'openspeak.savedConnections.v1';
-const localProfileDisplayNameKey = 'openspeak.localProfileDisplayName.v1';
-const localProfileAvatarPendingSyncKey =
-    'openspeak.localProfileAvatarPendingSync.v1';
 const clientInstallationIdKey = 'openspeak.clientInstallationId.v1';
 const audioInputDeviceKey = 'openspeak.audioInputDeviceId.v1';
 const audioOutputDeviceKey = 'openspeak.audioOutputDeviceId.v1';
@@ -736,6 +734,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   final soundEffects = SoundEffectPlayer();
   final ownerIdentity = OwnerIdentityService();
   final deviceIdentity = DeviceIdentityService();
+  final localProfileService = LocalProfileService();
   final pushToTalkHotkey = GlobalPushToTalkHotkey();
 
   OpenSpeakApi? api;
@@ -1450,101 +1449,40 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   }
 
   Future<void> loadLocalProfile() async {
-    final prefs = await SharedPreferences.getInstance();
-    final savedName = prefs.getString(localProfileDisplayNameKey)?.trim();
-    if (kIsWeb) {
-      if (mounted && savedName != null && savedName.isNotEmpty) {
-        setState(() => localDisplayName = savedName);
-      }
-      return;
-    }
-    final avatar = await localAvatarStorageFile();
-    final avatarExists = await avatar.exists() && await avatar.length() > 0;
+    final profile = await localProfileService.load(includeAvatar: !kIsWeb);
     if (!mounted) return;
     setState(() {
-      if (savedName != null && savedName.isNotEmpty) {
-        localDisplayName = savedName;
+      if (profile.displayName case final String displayName
+          when displayName.isNotEmpty) {
+        localDisplayName = displayName;
       }
-      localAvatarFile = avatarExists ? avatar : null;
-      if (avatarExists) localAvatarRevision += 1;
+      if (!kIsWeb) {
+        localAvatarFile = profile.avatar;
+        if (profile.avatar != null) localAvatarRevision += 1;
+      }
     });
-  }
-
-  Future<File> localAvatarStorageFile() async {
-    final support = await getApplicationSupportDirectory();
-    return File(
-      '${support.path}${Platform.pathSeparator}profile${Platform.pathSeparator}avatar.original',
-    );
-  }
-
-  Future<File> persistLocalAvatarBytes(List<int> bytes) async {
-    final target = await localAvatarStorageFile();
-    await target.parent.create(recursive: true);
-    final temporary = File('${target.path}.tmp');
-    await temporary.writeAsBytes(bytes, flush: true);
-    if (await target.exists()) {
-      await FileImage(target).evict();
-      await target.delete();
-    }
-    final persisted = await temporary.rename(target.path);
-    // FileImage keys are path-based. Evict again after replacement so any
-    // listener that raced with the write cannot retain the previous bytes.
-    await FileImage(persisted).evict();
-    return persisted;
-  }
-
-  Future<File> persistLocalAvatar(File source) async {
-    final target = await localAvatarStorageFile();
-    if (source.absolute.path == target.absolute.path) return target;
-    return persistLocalAvatarBytes(await source.readAsBytes());
-  }
-
-  Future<String> avatarFileHash(File file) async {
-    final hash = await Sha256().hash(await file.readAsBytes());
-    return hash.bytes
-        .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
-        .join();
   }
 
   Future<AuthSession> syncLocalAvatarWithServer(
     OpenSpeakApi client,
     AuthSession auth,
   ) async {
-    final prefs = await SharedPreferences.getInstance();
-    final pendingSync =
-        prefs.getBool(localProfileAvatarPendingSyncKey) ?? false;
-    var local = await localAvatarStorageFile();
-    if (await local.exists() && await local.length() > 0) {
-      final localHash = await avatarFileHash(local);
-      if (shouldUploadLocalAvatar(
-        pendingSync: pendingSync,
-        localHash: localHash,
-        remoteHash: auth.user.avatarHash,
-      )) {
-        final user = await client.uploadCurrentUserAvatar(auth.token, local);
-        await prefs.setBool(localProfileAvatarPendingSyncKey, false);
-        return AuthSession(
-          token: auth.token,
-          user: user,
-          expiresAt: auth.expiresAt,
-        );
-      }
-      return auth;
-    }
-    if (auth.user.avatarVersion <= 0) return auth;
-    final bytes = await client.downloadUserAvatar(
-      auth.token,
-      auth.user.id,
-      auth.user.avatarVersion,
+    final result = await localProfileService.syncAvatar(
+      session: auth,
+      upload: (file) => client.uploadCurrentUserAvatar(auth.token, file),
+      download: () => client.downloadUserAvatar(
+        auth.token,
+        auth.user.id,
+        auth.user.avatarVersion,
+      ),
     );
-    local = await persistLocalAvatarBytes(bytes);
-    if (mounted) {
+    if (mounted && result.downloadedAvatar != null) {
       setState(() {
-        localAvatarFile = local;
+        localAvatarFile = result.downloadedAvatar;
         localAvatarRevision += 1;
       });
     }
-    return auth;
+    return result.session;
   }
 
   Future<void> loadAudioDevicePreferences() async {
@@ -5710,20 +5648,16 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   }
 
   Future<void> applyLocalDisplayName(String value, {File? avatarFile}) async {
-    final trimmed = value.trim();
-    if (trimmed.isEmpty) return;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(localProfileDisplayNameKey, trimmed);
-    File? persistedAvatar;
-    if (avatarFile != null) {
-      persistedAvatar = await persistLocalAvatar(avatarFile);
-      await prefs.setBool(localProfileAvatarPendingSyncKey, true);
-    }
+    final profile = await localProfileService.save(
+      value,
+      avatarFile: avatarFile,
+    );
+    if (profile == null) return;
     if (!mounted) return;
     setState(() {
-      localDisplayName = trimmed;
-      if (persistedAvatar != null) {
-        localAvatarFile = persistedAvatar;
+      localDisplayName = profile.displayName;
+      if (profile.avatar != null) {
+        localAvatarFile = profile.avatar;
         localAvatarRevision += 1;
       }
     });
@@ -5732,16 +5666,16 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     if (client == null || auth == null) return;
     await runGuarded(() async {
       var updatedUser = auth.user;
-      if (persistedAvatar != null) {
+      if (profile.avatar != null) {
         updatedUser = await client.uploadCurrentUserAvatar(
           auth.token,
-          persistedAvatar,
+          profile.avatar!,
         );
-        await prefs.setBool(localProfileAvatarPendingSyncKey, false);
+        await localProfileService.markAvatarSynced();
       }
       updatedUser = await client.updateCurrentUserDisplayName(
         auth.token,
-        trimmed,
+        profile.displayName,
       );
       if (!mounted || !identical(session, auth)) return;
       setState(() {
@@ -10046,14 +9980,6 @@ bool channelMemberIsSpeaking(
     currentRoomParticipantUserIds.contains(userId) &&
     (currentRoomSpeakingUserIds.contains(userId) ||
         (userId != localUserId && reportedSpeaking));
-
-bool shouldUploadLocalAvatar({
-  required bool pendingSync,
-  required String localHash,
-  required String remoteHash,
-}) {
-  return pendingSync || localHash != remoteHash;
-}
 
 List<Channel> channelsAfterMove(
   List<Channel> channels,

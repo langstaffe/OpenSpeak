@@ -2460,33 +2460,6 @@ void main() {
     monitor.dispose();
   });
 
-  test('offline avatar changes force the next server sync', () {
-    expect(
-      shouldUploadLocalAvatar(
-        pendingSync: true,
-        localHash: 'same',
-        remoteHash: 'same',
-      ),
-      isTrue,
-    );
-    expect(
-      shouldUploadLocalAvatar(
-        pendingSync: false,
-        localHash: 'same',
-        remoteHash: 'same',
-      ),
-      isFalse,
-    );
-    expect(
-      shouldUploadLocalAvatar(
-        pendingSync: false,
-        localHash: 'new',
-        remoteHash: 'old',
-      ),
-      isTrue,
-    );
-  });
-
   testWidgets('current user nickname is vertically centered with avatar', (
     WidgetTester tester,
   ) async {
