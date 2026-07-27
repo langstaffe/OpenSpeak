@@ -5300,9 +5300,6 @@ void main() {
     final openEnded = parseProxyRange('bytes=1024-', 5 * 1024 * 1024);
     expect(openEnded?.start, 1024);
     expect(openEnded?.end, 5 * 1024 * 1024 - 1);
-    final limited = limitAudioProxyRange(openEnded!);
-    expect(limited.start, 1024);
-    expect(limited.length, audioProxySegmentBytes);
 
     final longRange = parseProxyRange('bytes=0-8284880', 8284881);
     expect(longRange?.start, 0);

@@ -14911,14 +14911,14 @@ class AudioStreamProxy {
       response.headers.set(HttpHeaders.cacheControlHeader, 'no-store');
 
       final rangeHeader = request.headers.value(HttpHeaders.rangeHeader);
-      final requestedRange = parseProxyRange(rangeHeader, size);
-      if (rangeHeader != null && requestedRange == null) {
+      final range = parseProxyRange(rangeHeader, size);
+      if (rangeHeader != null && range == null) {
         response.statusCode = HttpStatus.requestedRangeNotSatisfiable;
         statusCode = response.statusCode;
         response.headers.set(HttpHeaders.contentRangeHeader, 'bytes */$size');
         return;
       }
-      if (requestedRange == null) {
+      if (range == null) {
         response.statusCode = HttpStatus.ok;
         statusCode = response.statusCode;
         response.headers.contentLength = size;
@@ -14931,8 +14931,6 @@ class AudioStreamProxy {
         );
         return;
       }
-
-      final range = limitAudioProxyRange(requestedRange);
 
       response.statusCode = HttpStatus.partialContent;
       statusCode = response.statusCode;
@@ -15084,12 +15082,6 @@ bool shouldReloadAudioSource({
 const audioProxyFetchChunkBytes = 1024 * 1024;
 const audioProxyInitialBurstBytes = 768 * 1024;
 const audioProxySeekBurstBytes = 128 * 1024;
-const audioProxySegmentBytes = 1024 * 1024;
-
-AudioProxyRange limitAudioProxyRange(AudioProxyRange range) => AudioProxyRange(
-  start: range.start,
-  end: math.min(range.end, range.start + audioProxySegmentBytes - 1),
-);
 
 int audioProxyFetchSize(int streamStart, int offset) => offset != streamStart
     ? audioProxyFetchChunkBytes
