@@ -42,6 +42,7 @@ import 'owner_identity_service.dart';
 import 'platform_open.dart';
 import 'realtime_connection_controller.dart';
 import 'sound_effects.dart';
+import 'unread_state_controller.dart';
 import 'voice_session_controller.dart';
 
 Future<void> main() async {
@@ -123,19 +124,9 @@ const microphoneThresholdKey = 'openspeak.microphoneThreshold.v1';
 const microphonePushToTalkHotkeyKey = 'openspeak.microphonePushToTalkHotkey.v1';
 const noiseSuppressionEnabledKey = 'openspeak.noiseSuppressionEnabled.v1';
 const memberOutputVolumesKey = 'openspeak.memberOutputVolumes.v1';
-const unreadStateKeyPrefix = 'openspeak.unreadState.v1';
 const webAuthSessionStorageKey = 'openspeak.webAuthSession.v1';
 // Keep cover parsing client-side and metadata-only so future E2EE can decrypt locally.
 const audioMetadataReadLimitBytes = 8 * 1024 * 1024;
-
-Map<String, int> positiveIntMapFromJson(Object? value) {
-  if (value is! Map) return {};
-  return {
-    for (final entry in value.entries)
-      if (entry.key is String && entry.value is int && entry.value > 0)
-        entry.key as String: entry.value as int,
-  };
-}
 
 typedef AudioDeviceEnumerator = Future<List<rtc.MediaDeviceInfo>> Function();
 typedef AudioDeviceChangeRegistrar =
@@ -1328,9 +1319,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   String? mediaKeyReadyTransition;
   final directMessages = <String, List<DirectMessage>>{};
   final pendingDirectMessages = <String, List<DirectMessage>>{};
-  final channelUnreadCounts = <String, int>{};
-  final channelMentionCounts = <String, int>{};
-  final directUnreadCounts = <String, int>{};
+  final unreadState = UnreadStateController();
   final expiredDirectFileIds = <String>{};
   final attachmentTransfers = AttachmentTransferController();
   final localAttachmentSources = <String, File>{};
@@ -1357,7 +1346,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   late final AudioPlaybackController audioPlayback;
   int currentChatNewMessages = 0;
   int connectionGeneration = 0;
-  Future<void> unreadPersist = Future.value();
   late final AudioDeviceMonitor audioDeviceMonitor;
   late final MutedSpeechReminder mutedSpeechReminder;
   VoiceSessionSnapshot previousVoiceSoundSnapshot =
@@ -1957,9 +1945,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       e2eeDeviceIdentity = null;
       directMessages.clear();
       pendingDirectMessages.clear();
-      channelUnreadCounts.clear();
-      channelMentionCounts.clear();
-      directUnreadCounts.clear();
+      unreadState.reset();
       currentChatNewMessages = 0;
       localAttachmentSources.clear();
       imagePreviewFutures.clear();
@@ -2524,9 +2510,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       directMessageKeys.clear();
       directMessages.clear();
       pendingDirectMessages.clear();
-      channelUnreadCounts.clear();
-      channelMentionCounts.clear();
-      directUnreadCounts.clear();
+      unreadState.reset(serverId: server.id, userId: auth.user.id);
       currentChatNewMessages = 0;
       localAttachmentSources.clear();
       imagePreviewFutures.clear();
@@ -4035,7 +4019,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     );
     setState(() {
       if (visibleNow) showCurrentChatNewMessageHint();
-      addChannelUnread(
+      unreadState.addChannel(
         channelId,
         mention: message != null && channelMessageMentionsCurrentUser(message),
       );
@@ -4323,10 +4307,10 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         if (activeDirect) {
           if (!wasAtBottom) {
             showCurrentChatNewMessageHint();
-            addDirectUnread(peerId);
+            unreadState.addDirect(peerId);
           }
         } else {
-          addDirectUnread(peerId);
+          unreadState.addDirect(peerId);
         }
       }
     });
@@ -5681,16 +5665,14 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     if (chatScope == ChatScope.channel) {
       final channelId = selectedChannel?.id;
       if (channelId != null) {
-        channelUnreadCounts.remove(channelId);
-        channelMentionCounts.remove(channelId);
-        persistUnreadState();
+        unreadState.clearChannel(channelId);
       }
       return;
     }
     final userId = selectedDirectUserId;
     if (userId != null) {
       mergePendingDirectMessages(userId);
-      directUnreadCounts.remove(userId);
+      unreadState.clearDirect(userId);
     }
   }
 
@@ -5711,99 +5693,35 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   }
 
   void clearChannelUnread(String channelId) {
-    final removedUnread = channelUnreadCounts.remove(channelId) != null;
-    final removedMention = channelMentionCounts.remove(channelId) != null;
+    unreadState.clearChannel(channelId);
     clearCurrentChatNewMessageHint();
-    if (removedUnread || removedMention) persistUnreadState();
   }
 
   void retainChannelUnreadOnly(String channelId) {
-    final unreadLength = channelUnreadCounts.length;
-    final mentionLength = channelMentionCounts.length;
-    channelUnreadCounts.removeWhere((key, _) => key != channelId);
-    channelMentionCounts.removeWhere((key, _) => key != channelId);
+    unreadState.retainChannelOnly(channelId);
     if (chatScope == ChatScope.channel) clearCurrentChatNewMessageHint();
-    if (channelUnreadCounts.length != unreadLength ||
-        channelMentionCounts.length != mentionLength) {
-      persistUnreadState();
-    }
   }
 
   void clearDirectUnread(String userId) {
     mergePendingDirectMessages(userId);
-    directUnreadCounts.remove(userId);
+    unreadState.clearDirect(userId);
     clearCurrentChatNewMessageHint();
   }
 
-  void addChannelUnread(String channelId, {required bool mention}) {
-    channelUnreadCounts[channelId] = (channelUnreadCounts[channelId] ?? 0) + 1;
-    if (mention) {
-      channelMentionCounts[channelId] =
-          (channelMentionCounts[channelId] ?? 0) + 1;
-    }
-    persistUnreadState();
-  }
-
-  void addDirectUnread(String userId) {
-    directUnreadCounts[userId] = (directUnreadCounts[userId] ?? 0) + 1;
-  }
-
-  int get totalUnreadCount {
-    final channelUnread = channelUnreadCounts.values.fold<int>(
-      0,
-      (sum, value) => sum + value,
-    );
-    final directUnread = directUnreadCounts.values.fold<int>(
-      0,
-      (sum, value) => sum + value,
-    );
-    return channelUnread + directUnread;
-  }
-
   Future<void> restoreUnreadState(String serverId, String userId) async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString('$unreadStateKeyPrefix.$serverId.$userId');
-    if (raw == null || raw.isEmpty) return;
-    try {
-      final decoded = jsonDecode(raw);
-      if (decoded is! Map) return;
-      final counts = positiveIntMapFromJson(decoded['channels']);
-      final mentions = positiveIntMapFromJson(decoded['mentions']);
-      if (!mounted ||
-          selectedServer?.id != serverId ||
-          session?.user.id != userId) {
-        return;
-      }
-      final currentChannelId = channelMessageNotificationChannelId();
-      counts.removeWhere((key, _) => key != currentChannelId);
-      mentions.removeWhere((key, _) => key != currentChannelId);
-      setState(() {
-        channelUnreadCounts
-          ..clear()
-          ..addAll(counts);
-        channelMentionCounts
-          ..clear()
-          ..addAll(mentions);
-      });
-    } catch (_) {
-      await prefs.remove('$unreadStateKeyPrefix.$serverId.$userId');
+    final stored = await unreadState.load(serverId, userId);
+    if (stored == null ||
+        !mounted ||
+        selectedServer?.id != serverId ||
+        session?.user.id != userId) {
+      return;
     }
-  }
-
-  void persistUnreadState() {
-    final serverId = selectedServer?.id;
-    final userId = session?.user.id;
-    if (serverId == null || userId == null) return;
-    final raw = jsonEncode({
-      'channels': channelUnreadCounts,
-      'mentions': channelMentionCounts,
-    });
-    unreadPersist = unreadPersist
-        .then((_) async {
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setString('$unreadStateKeyPrefix.$serverId.$userId', raw);
-        })
-        .catchError((_) {});
+    setState(
+      () => unreadState.restoreChannels(
+        stored,
+        retainChannelId: channelMessageNotificationChannelId(),
+      ),
+    );
   }
 
   bool channelMessageMentionsCurrentUser(ChannelMessage message) {
@@ -9048,8 +8966,10 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                       return MobileChannelCard(
                         channel: channel,
                         selected: currentVoiceChannelId == channel.id,
-                        unreadCount: channelUnreadCounts[channel.id] ?? 0,
-                        mentionCount: channelMentionCounts[channel.id] ?? 0,
+                        unreadCount:
+                            unreadState.channelUnreadCounts[channel.id] ?? 0,
+                        mentionCount:
+                            unreadState.channelMentionCounts[channel.id] ?? 0,
                         members: presence.users
                             .where(
                               (user) =>
@@ -9132,7 +9052,8 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                           user.currentChannelId,
                           fallbackToFirst: false,
                         )?.name,
-                        unreadCount: directUnreadCounts[user.userId] ?? 0,
+                        unreadCount:
+                            unreadState.directUnreadCounts[user.userId] ?? 0,
                         avatarUri: chatAvatarUriForUser(user.userId),
                         avatarToken: session?.token,
                         onTap: () => openMobileDirectChat(user),
@@ -9268,11 +9189,11 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       (sum, channel) =>
           sum +
           math.max(
-            channelUnreadCounts[channel.id] ?? 0,
-            channelMentionCounts[channel.id] ?? 0,
+            unreadState.channelUnreadCounts[channel.id] ?? 0,
+            unreadState.channelMentionCounts[channel.id] ?? 0,
           ),
     );
-    final directUnread = directUnreadCounts.values.fold<int>(
+    final directUnread = unreadState.directUnreadCounts.values.fold<int>(
       0,
       (sum, value) => sum + value,
     );
@@ -9675,7 +9596,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                     imageUri: savedServerAvatarUri(connection),
                     selected: isCurrentSavedConnection(connection),
                     badgeCount: isCurrentSavedConnection(connection)
-                        ? totalUnreadCount
+                        ? unreadState.totalUnreadCount
                         : 0,
                     onTap: isCurrentSavedConnection(connection)
                         ? null
@@ -9762,14 +9683,16 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                           key: ValueKey(channel.id),
                           channel: channel,
                           selected: selectedChannel?.id == channel.id,
-                          unreadCount: channelUnreadCounts[channel.id] ?? 0,
-                          mentionCount: channelMentionCounts[channel.id] ?? 0,
+                          unreadCount:
+                              unreadState.channelUnreadCounts[channel.id] ?? 0,
+                          mentionCount:
+                              unreadState.channelMentionCounts[channel.id] ?? 0,
                           members: presence.users
                               .where(
                                 (user) => user.currentChannelId == channel.id,
                               )
                               .toList(),
-                          directUnreadCounts: directUnreadCounts,
+                          directUnreadCounts: unreadState.directUnreadCounts,
                           voiceStatesByUserId: voiceStatesByUserId,
                           currentUserId: session?.user.id,
                           currentUserMicrophoneUnavailable:
