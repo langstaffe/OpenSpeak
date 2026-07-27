@@ -114,7 +114,6 @@ bool webLoginNeedsPasswordPrompt(Object error, {required bool isWeb}) =>
     error is OpenSpeakException &&
     error.code == 'invalid_server_password';
 
-const savedConnectionsKey = 'openspeak.savedConnections.v1';
 const clientInstallationIdKey = 'openspeak.clientInstallationId.v1';
 const webAuthSessionStorageKey = 'openspeak.webAuthSession.v1';
 
@@ -1419,23 +1418,10 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   }
 
   Future<void> loadSavedConnections() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(savedConnectionsKey);
-    if (raw == null || raw.trim().isEmpty) return;
-    final decoded = jsonDecode(raw);
-    if (decoded is! List) return;
-    var loaded = decoded
-        .whereType<Map>()
-        .map(
-          (item) =>
-              SavedServerConnection.fromJson(Map<String, dynamic>.from(item)),
-        )
-        .where((item) => item.url.isNotEmpty)
-        .toList();
-    if (kIsWeb) {
-      final origin = initialServerUrl();
-      loaded = loaded.where((item) => item.url == origin).toList();
-    }
+    final loaded = await loadSavedServerConnections(
+      onlyUrl: kIsWeb ? initialServerUrl() : null,
+    );
+    if (loaded == null) return;
     if (!mounted) return;
     setState(() => savedConnections = loaded);
   }
@@ -1610,11 +1596,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   }
 
   Future<void> persistSavedConnections() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = jsonEncode(
-      savedConnections.map((item) => item.toJson()).toList(),
-    );
-    await prefs.setString(savedConnectionsKey, raw);
+    await saveSavedServerConnections(savedConnections);
   }
 
   Future<void> persistSelectedConnectionUrl(String url) async {

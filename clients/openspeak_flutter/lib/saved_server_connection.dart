@@ -1,6 +1,11 @@
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:shared_preferences/shared_preferences.dart';
+
 import 'openspeak_api.dart';
+
+const savedConnectionsKey = 'openspeak.savedConnections.v1';
 
 class SavedServerConnection {
   const SavedServerConnection({
@@ -54,6 +59,46 @@ class SavedServerConnection {
     password: password ?? this.password,
     serverId: serverId ?? this.serverId,
     avatarVersion: avatarVersion ?? this.avatarVersion,
+  );
+}
+
+Future<List<SavedServerConnection>?> loadSavedServerConnections({
+  String? onlyUrl,
+}) async {
+  final prefs = await SharedPreferences.getInstance();
+  final raw = prefs.getString(savedConnectionsKey);
+  if (raw == null || raw.trim().isEmpty) return null;
+  Object? decoded;
+  try {
+    decoded = jsonDecode(raw);
+  } catch (_) {
+    return null;
+  }
+  if (decoded is! List) return null;
+  final connections = <SavedServerConnection>[];
+  for (final item in decoded.whereType<Map>()) {
+    try {
+      final connection = SavedServerConnection.fromJson(
+        Map<String, dynamic>.from(item),
+      );
+      if (connection.url.isNotEmpty &&
+          (onlyUrl == null || connection.url == onlyUrl)) {
+        connections.add(connection);
+      }
+    } catch (_) {
+      // Ignore a damaged entry without discarding the rest of the list.
+    }
+  }
+  return connections;
+}
+
+Future<void> saveSavedServerConnections(
+  Iterable<SavedServerConnection> connections,
+) async {
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.setString(
+    savedConnectionsKey,
+    jsonEncode(connections.map((item) => item.toJson()).toList()),
   );
 }
 
