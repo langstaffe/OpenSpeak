@@ -70,7 +70,6 @@ type Server struct {
 	repo             *store.SQLite
 	hub              *realtime.Hub
 	directFiles      *directFileStore
-	linkPreviews     *linkPreviewCache
 	ownerChallenges  *ownerChallengeStore
 	tlsApplyMu       sync.Mutex
 	tlsPendingMu     sync.Mutex
@@ -124,7 +123,6 @@ func NewServer(cfg config.Config, repo *store.SQLite, hub *realtime.Hub) *Server
 		repo:             repo,
 		hub:              hub,
 		directFiles:      newDirectFileStore(cfg.DirectFileRoot),
-		linkPreviews:     newLinkPreviewCache(24 * time.Hour),
 		ownerChallenges:  newOwnerChallengeStore(),
 		externalDeletes:  make(map[string]directFile),
 		mediaKeys:        make(map[string]*mediaKeyTransition),
@@ -295,11 +293,6 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request) {
 		ctx, ok := s.requireAuth(w, r)
 		if ok {
 			s.handleAttachmentUploads(w, r, ctx, parts[1:])
-		}
-	case "link-preview":
-		ctx, ok := s.requireAuth(w, r)
-		if ok {
-			s.handleLinkPreview(w, r, ctx, parts[1:])
 		}
 	default:
 		writeError(w, http.StatusNotFound, "not_found", "route not found")

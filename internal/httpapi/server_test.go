@@ -1607,58 +1607,11 @@ func TestUploadServerAvatarUpdatesMetadataAndServesThumbnail(t *testing.T) {
 	}
 }
 
-func TestParseLinkPreviewHTML(t *testing.T) {
-	base, err := url.Parse("https://example.com/articles/post")
-	if err != nil {
-		t.Fatal(err)
-	}
-	preview := parseLinkPreviewHTML(`
-		<html>
-			<head>
-				<title>Fallback Title</title>
-				<meta name="description" content="Fallback description">
-				<meta name="twitter:title" content="Twitter Title">
-				<meta property="og:title" content="OG Title">
-				<meta property="og:description" content="OG Description">
-				<meta property="og:image" content="/cover.jpg">
-			</head>
-		</html>
-	`, base)
-	if preview.Title != "OG Title" {
-		t.Fatalf("title = %q", preview.Title)
-	}
-	if preview.Description != "OG Description" {
-		t.Fatalf("description = %q", preview.Description)
-	}
-	if preview.ImageURL != "https://example.com/cover.jpg" {
-		t.Fatalf("image = %q", preview.ImageURL)
-	}
-}
-
-func TestFallbackLinkPreviewForKnownSites(t *testing.T) {
-	target, err := url.Parse("https://www.youtube.com")
-	if err != nil {
-		t.Fatal(err)
-	}
-	preview := fallbackLinkPreview(target)
-	if preview.Title != "YouTube" {
-		t.Fatalf("title = %q", preview.Title)
-	}
-	if !strings.Contains(preview.Description, "Enjoy the videos and music") {
-		t.Fatalf("description = %q", preview.Description)
-	}
-	if preview.ImageURL == "" {
-		t.Fatal("expected favicon image url")
-	}
-}
-
-func TestLinkPreviewRejectsLocalhost(t *testing.T) {
-	env := newChannelTestEnv(t, "none")
+func TestLinkPreviewEndpointRemoved(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/link-preview?url=http://127.0.0.1:27410/private", nil)
-	req.Header.Set("Authorization", "Bearer "+env.token)
 	response := httptest.NewRecorder()
-	env.server.ServeHTTP(response, req)
-	if response.Code != http.StatusBadRequest {
+	newChannelTestEnv(t, "none").server.ServeHTTP(response, req)
+	if response.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
 }

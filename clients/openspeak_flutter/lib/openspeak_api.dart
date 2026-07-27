@@ -1268,16 +1268,6 @@ class OpenSpeakApi {
     return ChannelMessage.fromJson(json as Map<String, dynamic>);
   }
 
-  Future<LinkPreview> getLinkPreview(String token, String url) async {
-    final json = await request(
-      'GET',
-      '/api/v1/link-preview',
-      token: token,
-      query: {'url': url},
-    );
-    return LinkPreview.fromJson((json as Map).cast<String, dynamic>());
-  }
-
   Future<ChannelUploadResult> uploadChannelImage(
     String token,
     String channelId,
@@ -3015,16 +3005,6 @@ class LinkPreview {
       title.trim().isNotEmpty ||
       description.trim().isNotEmpty ||
       imageUrl.trim().isNotEmpty;
-
-  factory LinkPreview.fromJson(Map<String, dynamic> json) {
-    return LinkPreview(
-      url: json['url'] as String? ?? '',
-      domain: json['domain'] as String? ?? '',
-      title: json['title'] as String? ?? '',
-      description: json['description'] as String? ?? '',
-      imageUrl: json['imageUrl'] as String? ?? '',
-    );
-  }
 }
 
 class AttachmentUploadPlan {
