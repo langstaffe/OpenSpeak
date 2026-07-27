@@ -2654,6 +2654,10 @@ void main() {
 
       expect(find.byType(InteractiveViewer), findsOneWidget);
       expect(
+        tester.widget<Dialog>(find.byType(Dialog)).clipBehavior,
+        Clip.antiAlias,
+      );
+      expect(
         tester.getSize(find.byType(InteractiveViewer)),
         const Size(768, 568),
       );

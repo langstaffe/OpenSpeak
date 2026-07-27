@@ -16271,6 +16271,7 @@ class ImageLightbox extends StatelessWidget {
       insetPadding: const EdgeInsets.all(16),
       backgroundColor: Colors.transparent,
       elevation: 0,
+      clipBehavior: Clip.antiAlias,
       child: Stack(
         children: [
           Positioned.fill(
