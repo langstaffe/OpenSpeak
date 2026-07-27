@@ -8,6 +8,97 @@ import 'dart:js_interop';
 import 'dart:js_interop_unsafe';
 import 'dart:typed_data';
 
+class BrowserUploadResponse {
+  const BrowserUploadResponse({required this.statusCode, required this.body});
+
+  final int statusCode;
+  final String body;
+}
+
+class BrowserUploadException implements Exception {
+  const BrowserUploadException(this.message, {this.aborted = false});
+
+  final String message;
+  final bool aborted;
+
+  @override
+  String toString() => message;
+}
+
+Future<BrowserUploadResponse> sendBrowserUpload({
+  required String method,
+  required Uri uri,
+  required Uint8List bytes,
+  required String contentType,
+  Map<String, String> headers = const {},
+  Map<String, String> fields = const {},
+  String? fieldName,
+  String? fileName,
+  void Function(int transferred, int total)? onProgress,
+  Future<void>? cancelled,
+}) {
+  final request = html.HttpRequest();
+  final result = Completer<BrowserUploadResponse>();
+  var transferred = 0;
+  var total = bytes.length;
+
+  void fail(BrowserUploadException error) {
+    if (!result.isCompleted) result.completeError(error);
+  }
+
+  request.upload.onProgress.listen((event) {
+    if (result.isCompleted) return;
+    transferred = event.loaded ?? transferred;
+    if (event.lengthComputable && (event.total ?? 0) > 0) {
+      total = event.total!;
+    }
+    onProgress?.call(transferred, total);
+  });
+  request
+    ..open(method, uri.toString())
+    ..responseType = 'text';
+  for (final header in headers.entries) {
+    request.setRequestHeader(header.key, header.value);
+  }
+  request.onLoad.listen((_) {
+    if (result.isCompleted) return;
+    onProgress?.call(total, total);
+    result.complete(
+      BrowserUploadResponse(
+        statusCode: request.status ?? 0,
+        body: request.responseText ?? '',
+      ),
+    );
+  });
+  request.onError.listen(
+    (_) => fail(const BrowserUploadException('浏览器上传网络请求失败')),
+  );
+  request.onAbort.listen(
+    (_) => fail(const BrowserUploadException('上传已取消', aborted: true)),
+  );
+  cancelled?.then((_) {
+    if (!result.isCompleted) request.abort();
+  });
+
+  onProgress?.call(0, total);
+  if (fieldName == null) {
+    request.setRequestHeader('Content-Type', contentType);
+    request.send(html.Blob([bytes], contentType));
+  } else {
+    final form = html.FormData();
+    for (final field in fields.entries) {
+      form.append(field.key, field.value);
+    }
+    form.appendBlob(
+      fieldName,
+      html.Blob([bytes], contentType),
+      fileName ?? 'upload',
+    );
+    request.send(form);
+  }
+  return result.future;
+}
+
 @JS('RTCPeerConnection')
 external JSFunction? get _rtcPeerConnection;
 

@@ -1,6 +1,38 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+class BrowserUploadResponse {
+  const BrowserUploadResponse({required this.statusCode, required this.body});
+
+  final int statusCode;
+  final String body;
+}
+
+class BrowserUploadException implements Exception {
+  const BrowserUploadException(this.message, {this.aborted = false});
+
+  final String message;
+  final bool aborted;
+
+  @override
+  String toString() => message;
+}
+
+Future<BrowserUploadResponse> sendBrowserUpload({
+  required String method,
+  required Uri uri,
+  required Uint8List bytes,
+  required String contentType,
+  Map<String, String> headers = const {},
+  Map<String, String> fields = const {},
+  String? fieldName,
+  String? fileName,
+  void Function(int transferred, int total)? onProgress,
+  Future<void>? cancelled,
+}) {
+  throw UnsupportedError('Browser uploads are unavailable');
+}
+
 bool browserSupportsWebRtc() => true;
 
 bool browserSupportsScreenShare() => true;

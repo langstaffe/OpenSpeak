@@ -26,6 +26,7 @@ import 'package:flutter/services.dart'
         MethodChannel,
         PhysicalKeyboardKey;
 import 'package:flutter_webrtc/flutter_webrtc.dart' as rtc;
+import 'package:http/http.dart' as http;
 import 'package:livekit_client/livekit_client.dart' as lk;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
@@ -5752,10 +5753,11 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       token: auth.token,
       attachment: attachment,
       readRange: attachment.encrypted
-          ? (start, endInclusive) => readAttachmentRange(
+          ? (rangeClient, start, endInclusive) => readAttachmentRange(
               attachment,
               start: start,
               endInclusive: endInclusive,
+              rangeClient: rangeClient,
             )
           : null,
     );
@@ -5781,6 +5783,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     ChatAttachment attachment, {
     required int start,
     required int endInclusive,
+    http.Client? rangeClient,
   }) async {
     final client = api;
     final auth = session;
@@ -5792,12 +5795,14 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
               attachment.fileId,
               start: start,
               endInclusive: endInclusive,
+              rangeClient: rangeClient,
             )
           : client.readStoredFileRange(
               auth.token,
               attachment.fileId,
               start: start,
               endInclusive: endInclusive,
+              rangeClient: rangeClient,
             );
     }
     final channel = attachment.direct
@@ -5822,12 +5827,14 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
               attachment.fileId,
               start: cipherStart,
               endInclusive: cipherEnd,
+              rangeClient: rangeClient,
             )
           : client.readStoredFileRange(
               auth.token,
               attachment.fileId,
               start: cipherStart,
               endInclusive: cipherEnd,
+              rangeClient: rangeClient,
             ),
       channelKey: key,
       channelId: attachment.channelId,
@@ -14814,6 +14821,7 @@ class DirectMessage {
 
 class AudioStreamProxy {
   HttpServer? _server;
+  final _rangeClient = http.Client();
   var _nextId = 0;
   final _entries = <String, AudioStreamEntry>{};
   final _events = <String>[];
@@ -14822,7 +14830,12 @@ class AudioStreamProxy {
     required OpenSpeakApi api,
     required String token,
     required ChatAttachment attachment,
-    Future<Uint8List> Function(int start, int endInclusive)? readRange,
+    Future<Uint8List> Function(
+      http.Client rangeClient,
+      int start,
+      int endInclusive,
+    )?
+    readRange,
   }) async {
     final server = await _ensureServer();
     final id = '${DateTime.now().microsecondsSinceEpoch}-${_nextId++}';
@@ -14830,6 +14843,7 @@ class AudioStreamProxy {
       api: api,
       token: token,
       attachment: attachment,
+      rangeClient: _rangeClient,
       readRange: readRange,
     );
     final uri = Uri(
@@ -14858,6 +14872,7 @@ class AudioStreamProxy {
 
   Future<void> _handle(HttpRequest request) async {
     final response = request.response;
+    response.bufferOutput = false;
     final startedAt = DateTime.now();
     var statusCode = 0;
     var bytesSent = 0;
@@ -14896,14 +14911,14 @@ class AudioStreamProxy {
       response.headers.set(HttpHeaders.cacheControlHeader, 'no-store');
 
       final rangeHeader = request.headers.value(HttpHeaders.rangeHeader);
-      final range = parseProxyRange(rangeHeader, size);
-      if (rangeHeader != null && range == null) {
+      final requestedRange = parseProxyRange(rangeHeader, size);
+      if (rangeHeader != null && requestedRange == null) {
         response.statusCode = HttpStatus.requestedRangeNotSatisfiable;
         statusCode = response.statusCode;
         response.headers.set(HttpHeaders.contentRangeHeader, 'bytes */$size');
         return;
       }
-      if (range == null) {
+      if (requestedRange == null) {
         response.statusCode = HttpStatus.ok;
         statusCode = response.statusCode;
         response.headers.contentLength = size;
@@ -14916,6 +14931,8 @@ class AudioStreamProxy {
         );
         return;
       }
+
+      final range = limitAudioProxyRange(requestedRange);
 
       response.statusCode = HttpStatus.partialContent;
       statusCode = response.statusCode;
@@ -14969,7 +14986,11 @@ class AudioStreamProxy {
   }
 
   Future<void> dispose() async {
+    for (final entry in _entries.values) {
+      entry.cancelled = true;
+    }
     _entries.clear();
+    _rangeClient.close();
     final server = _server;
     _server = null;
     await server?.close(force: true);
@@ -14984,7 +15005,6 @@ Future<int> streamProxyBytes(
 }) async {
   var offset = start;
   var sent = 0;
-  final startedAt = DateTime.now();
   while (offset <= end) {
     if (entry.cancelled) break;
     final chunkEnd = (offset + audioProxyFetchSize(start, offset) - 1).clamp(
@@ -14992,26 +15012,27 @@ Future<int> streamProxyBytes(
       end,
     );
     final bytes = entry.readRange != null
-        ? await entry.readRange!(offset, chunkEnd)
+        ? await entry.readRange!(entry.rangeClient, offset, chunkEnd)
         : entry.attachment.direct
         ? await entry.api.readDirectFileRange(
             entry.token,
             entry.attachment.fileId,
             start: offset,
             endInclusive: chunkEnd,
+            rangeClient: entry.rangeClient,
           )
         : await entry.api.readStoredFileRange(
             entry.token,
             entry.attachment.fileId,
             start: offset,
             endInclusive: chunkEnd,
+            rangeClient: entry.rangeClient,
           );
     if (bytes.isEmpty) break;
     if (entry.cancelled) break;
     response.add(bytes);
     await response.flush();
     sent += bytes.length;
-    await throttleAudioProxyStream(sent, startedAt);
     offset += bytes.length;
   }
   return sent;
@@ -15022,13 +15043,20 @@ class AudioStreamEntry {
     required this.api,
     required this.token,
     required this.attachment,
+    required this.rangeClient,
     this.readRange,
   });
 
   final OpenSpeakApi api;
   final String token;
   final ChatAttachment attachment;
-  final Future<Uint8List> Function(int start, int endInclusive)? readRange;
+  final http.Client rangeClient;
+  final Future<Uint8List> Function(
+    http.Client rangeClient,
+    int start,
+    int endInclusive,
+  )?
+  readRange;
   bool cancelled = false;
 }
 
@@ -15053,27 +15081,21 @@ bool shouldReloadAudioSource({
   required bool localSourceAvailable,
 }) => proxySourceStopped || !localSourceAvailable;
 
-const audioProxyFetchChunkBytes = 128 * 1024;
+const audioProxyFetchChunkBytes = 1024 * 1024;
 const audioProxyInitialBurstBytes = 768 * 1024;
-const audioProxyMaxBytesPerSecond = 512 * 1024;
+const audioProxySeekBurstBytes = 128 * 1024;
+const audioProxySegmentBytes = 1024 * 1024;
 
-int audioProxyFetchSize(int streamStart, int offset) =>
-    streamStart == 0 && offset == 0
+AudioProxyRange limitAudioProxyRange(AudioProxyRange range) => AudioProxyRange(
+  start: range.start,
+  end: math.min(range.end, range.start + audioProxySegmentBytes - 1),
+);
+
+int audioProxyFetchSize(int streamStart, int offset) => offset != streamStart
+    ? audioProxyFetchChunkBytes
+    : streamStart == 0
     ? audioProxyInitialBurstBytes
-    : audioProxyFetchChunkBytes;
-
-Future<void> throttleAudioProxyStream(int sent, DateTime startedAt) async {
-  final throttledBytes = sent - audioProxyInitialBurstBytes;
-  if (throttledBytes <= 0) return;
-  final expectedElapsed = Duration(
-    milliseconds: (throttledBytes * 1000 / audioProxyMaxBytesPerSecond).round(),
-  );
-  final actualElapsed = DateTime.now().difference(startedAt);
-  final delay = expectedElapsed - actualElapsed;
-  if (delay > Duration.zero) {
-    await Future<void>.delayed(delay);
-  }
-}
+    : audioProxySeekBurstBytes;
 
 AudioProxyRange? parseProxyRange(String? header, int size) {
   if (size <= 0) return null;
@@ -16096,6 +16118,62 @@ class _LinkPreviewImageState extends State<LinkPreviewImage> {
   }
 }
 
+class AudioSeekSlider extends StatefulWidget {
+  const AudioSeekSlider({
+    super.key,
+    required this.position,
+    required this.duration,
+    required this.onSeek,
+  });
+
+  final Duration position;
+  final Duration duration;
+  final Future<void> Function(Duration position) onSeek;
+
+  @override
+  State<AudioSeekSlider> createState() => _AudioSeekSliderState();
+}
+
+class _AudioSeekSliderState extends State<AudioSeekSlider> {
+  double? dragValue;
+  var dragGeneration = 0;
+
+  Future<void> commit(double value, int generation) async {
+    try {
+      await widget.onSeek(Duration(milliseconds: value.round()));
+    } finally {
+      if (mounted && generation == dragGeneration) {
+        setState(() => dragValue = null);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final maximum = widget.duration.inMilliseconds <= 0
+        ? 1.0
+        : widget.duration.inMilliseconds.toDouble();
+    final value = (dragValue ?? widget.position.inMilliseconds.toDouble())
+        .clamp(0.0, maximum);
+    final enabled = widget.duration > Duration.zero;
+    return Slider(
+      min: 0,
+      max: maximum,
+      value: value,
+      onChangeStart: enabled
+          ? (value) {
+              dragGeneration += 1;
+              setState(() => dragValue = value);
+            }
+          : null,
+      onChanged: enabled ? (value) => setState(() => dragValue = value) : null,
+      onChangeEnd: enabled
+          ? (value) => unawaited(commit(value, dragGeneration))
+          : null,
+    );
+  }
+}
+
 class AudioAttachmentCard extends StatelessWidget {
   const AudioAttachmentCard({
     super.key,
@@ -16255,21 +16333,10 @@ class AudioAttachmentCard extends StatelessWidget {
                             overlayRadius: 12,
                           ),
                         ),
-                        child: Slider(
-                          min: 0,
-                          max: duration.inMilliseconds <= 0
-                              ? 1
-                              : duration.inMilliseconds.toDouble(),
-                          value: active && duration.inMilliseconds > 0
-                              ? position.inMilliseconds
-                                    .clamp(0, duration.inMilliseconds)
-                                    .toDouble()
-                              : 0,
-                          onChanged: duration.inMilliseconds <= 0
-                              ? null
-                              : (value) => unawaited(
-                                  onSeek(Duration(milliseconds: value.round())),
-                                ),
+                        child: AudioSeekSlider(
+                          position: active ? position : Duration.zero,
+                          duration: active ? duration : Duration.zero,
+                          onSeek: onSeek,
                         ),
                       ),
                     ),

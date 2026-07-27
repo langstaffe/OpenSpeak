@@ -9,6 +9,8 @@ import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'browser_actions.dart';
+
 typedef TransferProgress = void Function(int transferredBytes, int totalBytes);
 
 const legacyLocalAttachmentFileMaxBytes = 512 * 1024 * 1024;
@@ -68,11 +70,16 @@ Uri? canonicalServerBaseUri(Uri currentBase, Object? response) {
 
 class TransferCancelToken {
   bool _cancelled = false;
+  final Completer<void> _whenCancelled = Completer<void>();
 
   bool get isCancelled => _cancelled;
 
+  Future<void> get whenCancelled => _whenCancelled.future;
+
   void cancel() {
+    if (_cancelled) return;
     _cancelled = true;
+    _whenCancelled.complete();
   }
 
   void throwIfCancelled(String message) {
@@ -1599,6 +1606,24 @@ class OpenSpeakApi {
     TransferCancelToken? cancelToken,
     String? contentType,
   }) async {
+    if (kIsWeb) {
+      cancelToken?.throwIfCancelled('上传已取消');
+      final response = await _sendBrowserUpload(
+        method: 'PUT',
+        uri: Uri.parse(plan.uploadUrl),
+        file: file,
+        contentType: contentType ?? contentTypeForPath(file.path),
+        onProgress: onProgress,
+        cancelToken: cancelToken,
+      );
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw OpenSpeakException(
+          '外部文件节点 HTTP ${response.statusCode}: ${response.body}',
+          statusCode: response.statusCode,
+        );
+      }
+      return;
+    }
     final client = http.Client();
     try {
       final length = await file.length();
@@ -1641,6 +1666,26 @@ class OpenSpeakApi {
     TransferProgress? onProgress,
     TransferCancelToken? cancelToken,
   }) async {
+    if (kIsWeb) {
+      cancelToken?.throwIfCancelled('上传已取消');
+      final response = await _sendBrowserUpload(
+        method: 'POST',
+        uri: uri,
+        file: file,
+        contentType: contentType,
+        headers: {'Authorization': 'Bearer $token'},
+        fields: fields,
+        fieldName: fieldName,
+        fileName: multipartFallbackFileName(fileName),
+        onProgress: onProgress,
+        cancelToken: cancelToken,
+      );
+      final decoded = response.body.isEmpty ? null : jsonDecode(response.body);
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw apiException(response.statusCode, decoded, response.body);
+      }
+      return (decoded as Map).cast<String, dynamic>();
+    }
     final length = await file.length();
     var sent = 0;
     final stream = file.openRead().map((chunk) {
@@ -1668,6 +1713,41 @@ class OpenSpeakApi {
       throw apiException(response.statusCode, decoded, response.body);
     }
     return (decoded as Map).cast<String, dynamic>();
+  }
+
+  Future<BrowserUploadResponse> _sendBrowserUpload({
+    required String method,
+    required Uri uri,
+    required XFile file,
+    required String contentType,
+    Map<String, String> headers = const {},
+    Map<String, String> fields = const {},
+    String? fieldName,
+    String? fileName,
+    TransferProgress? onProgress,
+    TransferCancelToken? cancelToken,
+  }) async {
+    try {
+      final bytes = await file.readAsBytes();
+      cancelToken?.throwIfCancelled('上传已取消');
+      return await sendBrowserUpload(
+        method: method,
+        uri: uri,
+        bytes: bytes,
+        contentType: contentType,
+        headers: headers,
+        fields: fields,
+        fieldName: fieldName,
+        fileName: fileName,
+        onProgress: onProgress,
+        cancelled: cancelToken?.whenCancelled,
+      );
+    } on BrowserUploadException catch (error) {
+      if (error.aborted || cancelToken?.isCancelled == true) {
+        throw OpenSpeakException('上传已取消');
+      }
+      throw http.ClientException(error.message, uri);
+    }
   }
 
   Future<File> downloadDirectFile(
@@ -1839,12 +1919,14 @@ class OpenSpeakApi {
     String fileId, {
     required int start,
     required int endInclusive,
+    http.Client? rangeClient,
   }) {
     return readFileRange(
       token,
       '/api/v1/direct-files/$fileId/download',
       start: start,
       endInclusive: endInclusive,
+      rangeClient: rangeClient,
     );
   }
 
@@ -1853,12 +1935,14 @@ class OpenSpeakApi {
     String fileId, {
     required int start,
     required int endInclusive,
+    http.Client? rangeClient,
   }) {
     return readFileRange(
       token,
       '/api/v1/files/$fileId/download',
       start: start,
       endInclusive: endInclusive,
+      rangeClient: rangeClient,
     );
   }
 
@@ -1867,18 +1951,19 @@ class OpenSpeakApi {
     String path, {
     required int start,
     required int endInclusive,
+    http.Client? rangeClient,
   }) async {
     final target = await _downloadTarget(token, path);
     Object? lastError;
     for (var attempt = 0; attempt < 2; attempt += 1) {
       try {
-        final response = await http.get(
-          target.uri,
-          headers: {
-            if (target.withAuthorization) 'Authorization': 'Bearer $token',
-            'Range': 'bytes=$start-$endInclusive',
-          },
-        );
+        final headers = {
+          if (target.withAuthorization) 'Authorization': 'Bearer $token',
+          'Range': 'bytes=$start-$endInclusive',
+        };
+        final response = rangeClient == null
+            ? await http.get(target.uri, headers: headers)
+            : await rangeClient.get(target.uri, headers: headers);
         if (response.statusCode != httpStatusPartialContent) {
           throw OpenSpeakException('range request was not honored');
         }

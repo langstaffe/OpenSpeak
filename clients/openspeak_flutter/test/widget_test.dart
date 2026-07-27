@@ -605,6 +605,19 @@ void main() {
     expect(controller.downloads, isEmpty);
   });
 
+  test('transfer cancellation signal completes once', () async {
+    final token = TransferCancelToken();
+    var notifications = 0;
+    token.whenCancelled.then((_) => notifications += 1);
+
+    token.cancel();
+    token.cancel();
+    await token.whenCancelled;
+    await Future<void>.delayed(Duration.zero);
+
+    expect(notifications, 1);
+  });
+
   test('attachment transfer controller processes uploads serially', () async {
     TransferTask task(String name) => TransferTask.upload(
       file: XFile('/tmp/$name'),
@@ -5287,6 +5300,9 @@ void main() {
     final openEnded = parseProxyRange('bytes=1024-', 5 * 1024 * 1024);
     expect(openEnded?.start, 1024);
     expect(openEnded?.end, 5 * 1024 * 1024 - 1);
+    final limited = limitAudioProxyRange(openEnded!);
+    expect(limited.start, 1024);
+    expect(limited.length, audioProxySegmentBytes);
 
     final longRange = parseProxyRange('bytes=0-8284880', 8284881);
     expect(longRange?.start, 0);
@@ -5298,8 +5314,63 @@ void main() {
     );
     expect(
       audioProxyFetchSize(audioProxyFetchChunkBytes, audioProxyFetchChunkBytes),
+      audioProxySeekBurstBytes,
+    );
+    expect(
+      audioProxyFetchSize(
+        audioProxyFetchChunkBytes,
+        audioProxyFetchChunkBytes + audioProxySeekBurstBytes,
+      ),
       audioProxyFetchChunkBytes,
     );
+  });
+
+  testWidgets('audio slider seeks only after dragging ends', (tester) async {
+    var seeks = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AudioAttachmentCard(
+            attachment: ChatAttachment(
+              direct: false,
+              kind: 'file',
+              fileId: 'audio',
+              originalName: 'song.mp3',
+              contentType: 'audio/mpeg',
+              sizeBytes: 1024,
+              expiresAt: null,
+              expired: false,
+            ),
+            metadataFuture: Future.value(const AudioAttachmentMetadata()),
+            active: true,
+            loading: false,
+            playing: true,
+            position: const Duration(seconds: 10),
+            duration: const Duration(seconds: 100),
+            transferTask: null,
+            onToggle: () {},
+            onSeek: (_) async => seeks += 1,
+            onSaveAs: () {},
+            onCancel: () {},
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final slider = find.byType(Slider);
+    final initialValue = tester.widget<Slider>(slider).value;
+    final gesture = await tester.startGesture(tester.getCenter(slider));
+    await gesture.moveBy(const Offset(100, 0));
+    await tester.pump();
+
+    expect(tester.widget<Slider>(slider).value, greaterThan(initialValue));
+    expect(seeks, 0);
+
+    await gesture.up();
+    await tester.pump();
+
+    expect(seeks, 1);
   });
 
   test('stopped audio proxy reloads a newly cached source before resuming', () {
