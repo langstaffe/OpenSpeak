@@ -5060,9 +5060,9 @@ void main() {
     final preview = fallbackLinkPreview('https://www.bilibili.com/');
     expect(preview.hasContent, isTrue);
     expect(preview.domain, 'www.bilibili.com');
-    expect(preview.title, 'www.bilibili.com');
-    expect(preview.description, isEmpty);
-    expect(linkPreviewDescription(preview), isEmpty);
+    expect(preview.title, contains('哔哩哔哩'));
+    expect(preview.description, isNotEmpty);
+    expect(linkPreviewDescription(preview), isNotEmpty);
   });
 
   test('parses client-side link preview html metadata', () {

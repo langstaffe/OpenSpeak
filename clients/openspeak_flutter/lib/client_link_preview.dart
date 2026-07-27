@@ -2,6 +2,9 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:http/http.dart' as http;
+
 import 'openspeak_api.dart';
 
 String? firstPreviewableUrl(String body) {
@@ -94,6 +97,36 @@ LinkPreview fallbackLinkPreview(String url) {
 
 Future<LinkPreview> fetchClientLinkPreview(String url) async {
   final fallback = fallbackLinkPreview(url);
+  if (kIsWeb) {
+    final client = http.Client();
+    try {
+      final request = http.Request('GET', Uri.parse(url));
+      request.headers['Accept'] =
+          'text/html,application/xhtml+xml;q=0.9,*/*;q=0.1';
+      final response = await client
+          .send(request)
+          .timeout(const Duration(seconds: 5));
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        await response.stream.drain<void>().timeout(const Duration(seconds: 5));
+        return fallback;
+      }
+      final bodyBytes = await readLimitedBytes(
+        response.stream,
+        2 * 1024 * 1024,
+      ).timeout(const Duration(seconds: 5));
+      return mergeLinkPreview(
+        parseLinkPreviewHtml(
+          utf8.decode(bodyBytes, allowMalformed: true),
+          response.request?.url ?? Uri.parse(url),
+        ),
+        fallback,
+      );
+    } catch (_) {
+      return fallback;
+    } finally {
+      client.close();
+    }
+  }
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
   try {
     final request = await client.getUrl(Uri.parse(url));
@@ -273,6 +306,15 @@ LinkPreview knownSiteFallback(LinkPreview preview) {
       domain: preview.domain,
       title: '知乎 - 有问题，就会有答案',
       description: '知乎，中文互联网高质量的问答社区和创作者聚集的原创内容平台。',
+      imageUrl: preview.imageUrl,
+    );
+  }
+  if (host == 'bilibili.com') {
+    return LinkPreview(
+      url: preview.url,
+      domain: preview.domain,
+      title: '哔哩哔哩 (゜-゜)つロ 干杯~-bilibili',
+      description: '哔哩哔哩是国内知名的视频弹幕网站，这里有及时的动漫新番、活跃的 ACG 氛围和丰富的原创内容。',
       imageUrl: preview.imageUrl,
     );
   }
