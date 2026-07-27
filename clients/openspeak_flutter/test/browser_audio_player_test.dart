@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:openspeak_flutter/main.dart';
+import 'package:openspeak_flutter/audio_playback_controller.dart';
 
 void main() {
   test(
