@@ -18,6 +18,7 @@ import 'package:openspeak_flutter/audio_attachment_metadata.dart';
 import 'package:openspeak_flutter/audio_device_monitor.dart';
 import 'package:openspeak_flutter/audio_stream_proxy.dart';
 import 'package:openspeak_flutter/browser_actions.dart';
+import 'package:openspeak_flutter/client_link_preview.dart';
 import 'package:openspeak_flutter/client_log.dart';
 import 'package:openspeak_flutter/device_identity_service.dart';
 import 'package:openspeak_flutter/main.dart';
