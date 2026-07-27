@@ -2651,17 +2651,6 @@ void main() {
     },
   );
 
-  test('client installation IDs are UUIDv4 values', () {
-    final first = generateClientInstallationId();
-    final second = generateClientInstallationId();
-    final uuid = RegExp(
-      r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
-    );
-    expect(first, matches(uuid));
-    expect(second, matches(uuid));
-    expect(second, isNot(first));
-  });
-
   testWidgets('managed member row shows role and blacklist state', (
     WidgetTester tester,
   ) async {

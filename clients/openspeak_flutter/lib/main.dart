@@ -27,7 +27,6 @@ import 'package:flutter/services.dart'
 import 'package:flutter_webrtc/flutter_webrtc.dart' as rtc;
 import 'package:http/http.dart' as http;
 import 'package:livekit_client/livekit_client.dart' as lk;
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
 import 'attachment_cache_service.dart';
 import 'attachment_transfer_controller.dart';
@@ -38,6 +37,7 @@ import 'browser_actions.dart';
 import 'client_audio_preferences.dart';
 import 'client_link_preview.dart';
 import 'client_log.dart';
+import 'client_session_store.dart';
 import 'device_identity_service.dart';
 import 'local_profile_service.dart';
 import 'microphone_activation.dart';
@@ -113,9 +113,6 @@ bool webLoginNeedsPasswordPrompt(Object error, {required bool isWeb}) =>
     isWeb &&
     error is OpenSpeakException &&
     error.code == 'invalid_server_password';
-
-const clientInstallationIdKey = 'openspeak.clientInstallationId.v1';
-const webAuthSessionStorageKey = 'openspeak.webAuthSession.v1';
 
 class LatestChannelJoinQueue {
   var _generation = 0;
@@ -297,18 +294,6 @@ class OsColors {
   static const panelBorder = Color(0xFF3A3E46);
   static const field = Color(0xFF1F2125);
   static const blurpleSoft = Color(0xFF303653);
-}
-
-String generateClientInstallationId() {
-  final random = math.Random.secure();
-  final bytes = List<int>.generate(16, (_) => random.nextInt(256));
-  bytes[6] = (bytes[6] & 0x0F) | 0x40;
-  bytes[8] = (bytes[8] & 0x3F) | 0x80;
-  final hex = bytes
-      .map((value) => value.toRadixString(16).padLeft(2, '0'))
-      .join();
-  return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-'
-      '${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20)}';
 }
 
 String directEncryptionScope(
@@ -1053,15 +1038,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     );
   }
 
-  Future<String> loadOrCreateClientInstallationId() async {
-    final prefs = await SharedPreferences.getInstance();
-    final existing = prefs.getString(clientInstallationIdKey)?.trim() ?? '';
-    if (existing.isNotEmpty) return existing;
-    final created = generateClientInstallationId();
-    await prefs.setString(clientInstallationIdKey, created);
-    return created;
-  }
-
   Future<AuthSession> loginSession(
     OpenSpeakApi client,
     String displayName,
@@ -1085,9 +1061,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     String installationId,
   ) async {
     if (kIsWeb) {
-      final cached = AuthSession.fromStorage(
-        readBrowserSessionValue(webAuthSessionStorageKey),
-      );
+      final cached = loadWebAuthSession();
       if (cached != null) {
         try {
           return (
@@ -1098,17 +1072,12 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
           if (exception.statusCode != HttpStatus.unauthorized) rethrow;
         }
       }
-      removeBrowserSessionValue(webAuthSessionStorageKey);
+      clearWebAuthSession();
     }
     final session = await loginSession(client, displayName, installationId);
     final servers = await client.listServers(session.token);
     if (kIsWeb) cacheWebAuthSession(session);
     return (session: session, servers: servers);
-  }
-
-  void cacheWebAuthSession(AuthSession auth) {
-    if (!kIsWeb || auth.expiresAt == null) return;
-    writeBrowserSessionValue(webAuthSessionStorageKey, jsonEncode(auth));
   }
 
   Future<AuthSession> showWebPasswordDialog(
