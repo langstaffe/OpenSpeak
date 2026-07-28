@@ -20,6 +20,7 @@ import 'package:openspeak_flutter/audio_stream_proxy.dart';
 import 'package:openspeak_flutter/browser_actions.dart';
 import 'package:openspeak_flutter/chat_attachment_widgets.dart';
 import 'package:openspeak_flutter/chat_message_widgets.dart';
+import 'package:openspeak_flutter/client_audio_settings.dart';
 import 'package:openspeak_flutter/client_link_preview.dart';
 import 'package:openspeak_flutter/client_log.dart';
 import 'package:openspeak_flutter/main.dart';

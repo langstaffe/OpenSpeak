@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
+import 'os_avatar.dart';
 import 'os_theme.dart';
 import 'smooth_scroll.dart';
 
@@ -824,6 +827,465 @@ class OsDialogGlow extends StatelessWidget {
             BoxShadow(color: color, blurRadius: size / 2, spreadRadius: 20),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class MicrophoneActivationOption extends StatelessWidget {
+  const MicrophoneActivationOption({
+    super.key,
+    required this.selected,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+    this.icon,
+    this.expanded,
+  });
+
+  final bool selected;
+  final String title;
+  final String subtitle;
+  final VoidCallback? onTap;
+  final IconData? icon;
+  final Widget? expanded;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedOpacity(
+      opacity: onTap == null && !selected ? 0.55 : 1,
+      duration: const Duration(milliseconds: 150),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        decoration: BoxDecoration(
+          color: selected ? OsColors.blurpleSoft : OsColors.panelRaised,
+          borderRadius: BorderRadius.circular(11),
+          border: Border.all(
+            color: selected ? OsColors.blurple : OsColors.panelBorder,
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            MouseRegion(
+              cursor: onTap == null
+                  ? SystemMouseCursors.basic
+                  : SystemMouseCursors.click,
+              child: InkWell(
+                onTap: onTap,
+                borderRadius: BorderRadius.circular(11),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 11,
+                    vertical: 9,
+                  ),
+                  child: Row(
+                    children: [
+                      if (icon != null) ...[
+                        Icon(
+                          icon,
+                          color: selected ? OsColors.blurple : OsColors.muted,
+                          size: 19,
+                        ),
+                        const SizedBox(width: 10),
+                      ],
+                      Container(
+                        width: 16,
+                        height: 16,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: selected ? OsColors.blurple : OsColors.muted,
+                            width: 2,
+                          ),
+                        ),
+                        alignment: Alignment.center,
+                        child: selected
+                            ? Container(
+                                width: 8,
+                                height: 8,
+                                decoration: const BoxDecoration(
+                                  color: OsColors.blurple,
+                                  shape: BoxShape.circle,
+                                ),
+                              )
+                            : null,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              title,
+                              style: const TextStyle(
+                                color: OsColors.text,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              subtitle,
+                              style: const TextStyle(
+                                color: OsColors.dim,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            if (expanded != null) ...[
+              const Divider(height: 1, color: OsColors.panelBorder),
+              Padding(padding: const EdgeInsets.all(10), child: expanded!),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class OsSettingsTile extends StatelessWidget {
+  const OsSettingsTile({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    this.onTap,
+    this.enabled = true,
+    this.badge,
+    this.danger = false,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback? onTap;
+  final bool enabled;
+  final String? badge;
+  final bool danger;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = enabled && onTap != null;
+    final accent = danger ? OsColors.danger : OsColors.blurple;
+    return Material(
+      color: active ? OsColors.panelRaised : const Color(0xFF292B30),
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        onTap: active ? onTap : null,
+        mouseCursor: active
+            ? SystemMouseCursors.click
+            : SystemMouseCursors.basic,
+        borderRadius: BorderRadius.circular(14),
+        hoverColor: danger ? const Color(0x263C252A) : const Color(0x143F4EE8),
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 64),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: active ? OsColors.panelBorder : const Color(0xFF32353B),
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: active
+                      ? accent.withValues(alpha: 0.16)
+                      : const Color(0xFF31343A),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  icon,
+                  size: 19,
+                  color: active ? accent : OsColors.icon,
+                ),
+              ),
+              const SizedBox(width: 11),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                        color: active
+                            ? (danger ? const Color(0xFFFF8A8C) : OsColors.text)
+                            : OsColors.icon,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        color: active ? OsColors.dim : const Color(0xFF70767E),
+                        fontSize: 12,
+                        height: 1.3,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (badge != null) ...[
+                const SizedBox(width: 10),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF34373D),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    badge!,
+                    style: const TextStyle(
+                      color: OsColors.dim,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ] else if (active)
+                Icon(
+                  Icons.chevron_right_rounded,
+                  color: danger ? OsColors.danger : OsColors.dim,
+                  size: 22,
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class OsPrimaryButton extends StatelessWidget {
+  const OsPrimaryButton({
+    super.key,
+    required this.label,
+    required this.onPressed,
+    this.icon,
+  });
+
+  final String label;
+  final VoidCallback onPressed;
+  final IconData? icon;
+
+  @override
+  Widget build(BuildContext context) {
+    return FilledButton.icon(
+      onPressed: onPressed,
+      style: FilledButton.styleFrom(
+        backgroundColor: OsColors.blurple,
+        foregroundColor: Colors.white,
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 13),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        textStyle: const TextStyle(fontWeight: FontWeight.w900),
+      ),
+      icon: Icon(icon ?? Icons.arrow_forward_rounded, size: 17),
+      label: Text(label),
+    );
+  }
+}
+
+class OsSecondaryButton extends StatelessWidget {
+  const OsSecondaryButton({
+    super.key,
+    required this.label,
+    required this.onPressed,
+    this.icon,
+  });
+
+  final String label;
+  final VoidCallback onPressed;
+  final IconData? icon;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = TextButton.styleFrom(
+      foregroundColor: OsColors.muted,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+      textStyle: const TextStyle(fontWeight: FontWeight.w800),
+    );
+    if (icon != null) {
+      return TextButton.icon(
+        onPressed: onPressed,
+        style: style,
+        icon: Icon(icon, size: 17),
+        label: Text(label),
+      );
+    }
+    return TextButton(onPressed: onPressed, style: style, child: Text(label));
+  }
+}
+
+class OsFieldLabel extends StatelessWidget {
+  const OsFieldLabel(this.label, {super.key});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Text(
+    label,
+    style: const TextStyle(
+      color: OsColors.muted,
+      fontSize: 12,
+      fontWeight: FontWeight.w800,
+    ),
+  );
+}
+
+class OsSectionLabel extends StatelessWidget {
+  const OsSectionLabel(this.label, {super.key});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Text(
+    label,
+    style: const TextStyle(
+      color: OsColors.dim,
+      fontSize: 11,
+      fontWeight: FontWeight.w900,
+      letterSpacing: 0.7,
+    ),
+  );
+}
+
+class OsProfilePreview extends StatelessWidget {
+  const OsProfilePreview({
+    super.key,
+    required this.displayName,
+    this.avatarFile,
+    this.avatarUri,
+    this.avatarToken,
+    this.onChooseAvatar,
+  });
+
+  final String displayName;
+  final File? avatarFile;
+  final Uri? avatarUri;
+  final String? avatarToken;
+  final VoidCallback? onChooseAvatar;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(13),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFF303653), Color(0xFF2B2E34)],
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFF444B72)),
+      ),
+      child: Row(
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(15),
+            child: OsUserAvatar(
+              displayName: displayName,
+              size: 144,
+              avatarFile: avatarFile,
+              avatarUri: avatarUri,
+              avatarToken: avatarToken,
+              borderRadius: BorderRadius.circular(15),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  displayName,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: OsColors.text,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  avatarFile != null || avatarUri != null
+                      ? '已设置自定义头像'
+                      : '尚未设置头像',
+                  style: const TextStyle(
+                    color: OsColors.dim,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (onChooseAvatar != null) ...[
+            const SizedBox(width: 10),
+            OsSecondaryButton(label: '选择图片', onPressed: onChooseAvatar!),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class OsFormCard extends StatelessWidget {
+  const OsFormCard({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.child,
+  });
+
+  final IconData icon;
+  final String title;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: OsColors.panelRaised,
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(color: OsColors.panelBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, color: OsColors.blurple, size: 18),
+              const SizedBox(width: 8),
+              Text(
+                title,
+                style: const TextStyle(
+                  color: OsColors.text,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 9),
+          child,
+        ],
       ),
     );
   }
