@@ -3345,6 +3345,31 @@ void main() {
     );
   });
 
+  testWidgets('large Web server header places the avatar before its name', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ServerHeader(
+            serverName: '祥和山庄重生版',
+            showAvatar: true,
+            menuOpen: false,
+            onMenuPressed: (_) {},
+          ),
+        ),
+      ),
+    );
+
+    final avatar = find.descendant(
+      of: find.byType(ServerHeader),
+      matching: find.byType(OsUserAvatar),
+    );
+    final name = find.text('祥和山庄重生版');
+    expect(avatar, findsOneWidget);
+    expect(tester.getRect(avatar).right, lessThan(tester.getRect(name).left));
+  });
+
   test('shared smooth scroll approaches its target without jumping', () {
     final next = smoothWheelNextPixels(
       current: 0,

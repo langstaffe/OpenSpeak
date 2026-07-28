@@ -7519,6 +7519,14 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
               if (selectedServer != null)
                 ServerHeader(
                   serverName: selectedServer!.name,
+                  showAvatar: kIsWeb,
+                  avatarUri: selectedServer!.avatarVersion > 0
+                      ? api?.serverAvatarUri(
+                          selectedServer!.id,
+                          selectedServer!.avatarVersion,
+                          small: true,
+                        )
+                      : null,
                   menuOpen: serverMenuOpen,
                   onMenuPressed: (details) =>
                       unawaited(toggleServerMenu(details)),
@@ -9445,11 +9453,15 @@ class ServerHeader extends StatelessWidget {
   const ServerHeader({
     super.key,
     required this.serverName,
+    this.showAvatar = false,
+    this.avatarUri,
     required this.menuOpen,
     required this.onMenuPressed,
   });
 
   final String serverName;
+  final bool showAvatar;
+  final Uri? avatarUri;
   final bool menuOpen;
   final GestureTapUpCallback onMenuPressed;
 
@@ -9464,6 +9476,15 @@ class ServerHeader extends StatelessWidget {
       ),
       child: Row(
         children: [
+          if (showAvatar) ...[
+            OsUserAvatar(
+              displayName: serverName,
+              size: 34,
+              avatarUri: avatarUri,
+              backgroundColor: OsColors.blurple,
+            ),
+            const SizedBox(width: 11),
+          ],
           Expanded(
             child: Text(
               serverName,
