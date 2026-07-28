@@ -32,6 +32,7 @@ import 'package:openspeak_flutter/os_settings_shell.dart';
 import 'package:openspeak_flutter/os_theme.dart';
 import 'package:openspeak_flutter/responsive_layout.dart';
 import 'package:openspeak_flutter/saved_server_connection.dart';
+import 'package:openspeak_flutter/server_settings.dart';
 import 'package:openspeak_flutter/smooth_scroll.dart';
 import 'package:openspeak_flutter/sound_effects.dart';
 import 'package:openspeak_flutter/unread_state_controller.dart';
