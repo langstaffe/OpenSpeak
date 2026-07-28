@@ -34,6 +34,7 @@ import 'audio_attachment_metadata.dart';
 import 'audio_device_monitor.dart';
 import 'audio_playback_controller.dart';
 import 'browser_actions.dart';
+import 'channel_message_store.dart';
 import 'client_audio_preferences.dart';
 import 'client_link_preview.dart';
 import 'client_log.dart';
@@ -717,7 +718,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   OpenSpeakApi? api;
   Timer? realtimeStateRefreshTimer;
   Timer? channelEnvelopeRefreshTimer;
-  int channelMessagesLoadGeneration = 0;
   int channelSelectionGeneration = 0;
   final channelJoinQueue = LatestChannelJoinQueue();
   String? voiceChannelSwitchTargetId;
@@ -735,7 +735,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   VoiceState? myVoiceState;
   bool loading = false;
   String? error;
-  bool messagesLoading = false;
   bool attachmentDragActive = false;
   bool channelReorderSaving = false;
   bool serverMenuOpen = false;
@@ -751,7 +750,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   Set<String> currentServerPermissions = <String>{};
   int messageRetractWindowMinutes = 30;
   final activity = <RealtimeEvent>[];
-  final channelMessages = <ChannelMessage>[];
+  final channelMessageStore = ChannelMessageStore();
   final channelKeys = <String, SecretKeyData>{};
   final channelKeyLoads = <String, Future<SecretKeyData>>{};
   final channelKeyEnvelopeArrivals = <String, Completer<void>>{};
@@ -1361,7 +1360,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       selectedConnection = null;
       servers = [];
       channels = [];
-      channelMessages.clear();
+      channelMessageStore.reset();
       channelKeys.clear();
       directMessageKeys.clear();
       e2eeDeviceIdentity = null;
@@ -1793,7 +1792,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       selectedDirectUserId = null;
       mobileTabIndex = 0;
       mobileChatOpen = false;
-      channelMessages.clear();
+      channelMessageStore.reset();
       channelKeys.clear();
       directMessageKeys.clear();
       directMessageStore.reset();
@@ -1932,7 +1931,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
           chatScope = ChatScope.channel;
           if (channelChatVisibleNow(channel.id)) clearChannelUnread(channel.id);
           messageController.clear();
-          if (channelChanged) channelMessages.clear();
+          if (channelChanged) channelMessageStore.reset();
         });
         loadMessages = channelChanged;
       }
@@ -3163,15 +3162,13 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     final target = channel ?? selectedChannel;
     if (client == null || auth == null || target == null) return;
     if (!hasServerPermission('channel.messages.view')) {
-      channelMessagesLoadGeneration += 1;
       setState(() {
-        channelMessages.clear();
-        messagesLoading = false;
+        channelMessageStore.reset();
       });
       return;
     }
-    final generation = ++channelMessagesLoadGeneration;
-    setState(() => messagesLoading = true);
+    var generation = 0;
+    setState(() => generation = channelMessageStore.beginLoad());
     try {
       if (selectedServer?.encryptionMode == 'e2ee') {
         await ensureChannelKey(target);
@@ -3182,21 +3179,16 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       );
       if (!mounted ||
           selectedChannel?.id != target.id ||
-          generation != channelMessagesLoadGeneration) {
+          !channelMessageStore.isCurrent(generation)) {
         return;
       }
       setState(() {
-        final optimistic = channelMessages
-            .where(
-              (message) =>
-                  message.channelId == target.id &&
-                  attachmentTransfers.pendingLocalUploads.contains(message.id),
-            )
-            .toList();
-        channelMessages
-          ..clear()
-          ..addAll(messages)
-          ..addAll(optimistic);
+        channelMessageStore.replaceHistory(
+          generation,
+          messages,
+          channelId: target.id,
+          isPending: attachmentTransfers.pendingLocalUploads.contains,
+        );
         error = null;
       });
       if (scrollToEnd) {
@@ -3205,8 +3197,8 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         );
       }
     } finally {
-      if (mounted && generation == channelMessagesLoadGeneration) {
-        setState(() => messagesLoading = false);
+      if (mounted && channelMessageStore.isCurrent(generation)) {
+        setState(() => channelMessageStore.finishLoad(generation));
       }
     }
   }
@@ -3396,7 +3388,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       }
       if (!mounted || selectedChannel?.id != channel.id) return;
       if (messageController.text.trim() == body) messageController.clear();
-      setState(() => channelMessages.add(message));
+      setState(() => channelMessageStore.add(message));
       WidgetsBinding.instance.addPostFrameCallback(
         (_) => scrollMessagesToEnd(),
       );
@@ -3805,7 +3797,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     if (mounted &&
         localMessage != null &&
         selectedChannel?.id == task.targetId) {
-      setState(() => addOrReplaceChannelMessage(localMessage));
+      setState(() => channelMessageStore.addOrReplace(localMessage));
       WidgetsBinding.instance.addPostFrameCallback(
         (_) => scrollMessagesToEnd(animated: false),
       );
@@ -3936,7 +3928,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         removeOptimisticChannelMessage(localMessage.id);
       }
       if (selectedChannel?.id == task.targetId) {
-        addOrReplaceChannelMessage(result.message);
+        channelMessageStore.addOrReplace(result.message);
       }
     });
     WidgetsBinding.instance.addPostFrameCallback((_) => scrollMessagesToEnd());
@@ -4140,7 +4132,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   void removeOptimisticChannelMessage(String localId) {
     attachmentTransfers.removeLocalUpload(localId);
     audioMetadataFutures.remove(localId);
-    channelMessages.removeWhere((message) => message.id == localId);
+    channelMessageStore.remove(localId);
   }
 
   void removeOptimisticDirectMessage(String peerId, String localId) {
@@ -4185,15 +4177,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         audioMetadataFutures.remove(fileId);
       },
     );
-  }
-
-  void addOrReplaceChannelMessage(ChannelMessage message) {
-    final index = channelMessages.indexWhere((item) => item.id == message.id);
-    if (index >= 0) {
-      channelMessages[index] = message;
-    } else {
-      channelMessages.add(message);
-    }
   }
 
   void cancelUpload(TransferTask task) {
@@ -9307,10 +9290,11 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         subtitle: '当前账号没有查看频道消息的权限',
       );
     }
-    if (messagesLoading && channelMessages.isEmpty) {
+    final messages = channelMessageStore.messages;
+    if (channelMessageStore.loading && messages.isEmpty) {
       return const Center(child: CircularProgressIndicator(strokeWidth: 2));
     }
-    if (channelMessages.isEmpty) {
+    if (messages.isEmpty) {
       return const ChatEmptyState(title: '还没有消息', subtitle: '发送第一条频道消息');
     }
     return SmoothWheelScroll(
@@ -9323,10 +9307,10 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         // ignore: deprecated_member_use
         cacheExtent: cacheExtent,
         padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
-        itemCount: channelMessages.length,
+        itemCount: messages.length,
         itemBuilder: (context, index) {
-          final messageIndex = channelMessages.length - 1 - index;
-          final message = channelMessages[messageIndex];
+          final messageIndex = messages.length - 1 - index;
+          final message = messages[messageIndex];
           final attachment = attachmentFromChannelMessage(message);
           final mine = message.senderUserId == session?.user.id;
           final senderName = channelMessageSenderName(
@@ -9352,7 +9336,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
             key: ValueKey('channel-${message.id}'),
             sentAt: message.createdAt,
             previousSentAt: messageIndex > 0
-                ? channelMessages[messageIndex - 1].createdAt
+                ? messages[messageIndex - 1].createdAt
                 : null,
             child: message.kind == 'removed'
                 ? ChatMessageRemovalNotice(
