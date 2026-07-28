@@ -8,6 +8,7 @@ import 'dart:ui' as ui;
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:cryptography/cryptography.dart';
 import 'package:file_selector/file_selector.dart';
+import 'package:flutter/cupertino.dart' show CupertinoPage;
 import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -346,6 +347,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   final activityScrollController = ScrollController();
   final channelScrollController = ScrollController();
   final mobileChannelScrollController = ScrollController();
+  final mobileNavigatorKey = GlobalKey<NavigatorState>();
   final messageController = TextEditingController();
   final messageScrollController = ScrollController();
   final attachmentCache = AttachmentCacheService();
@@ -1503,7 +1505,11 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     }
   }
 
-  Future<void> loadChannel(Channel channel, {bool join = false}) async {
+  Future<void> loadChannel(
+    Channel channel, {
+    bool join = false,
+    bool awaitHistory = true,
+  }) async {
     final client = api;
     final auth = session;
     if (client == null || auth == null) return;
@@ -1587,7 +1593,14 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     }
     if (switchVoice) await switchLocalVoiceChannel(channel);
     if (loadMessages) {
-      await runGuarded(() => loadChannelMessages(channel: channel));
+      final messageLoad = runGuarded(
+        () => loadChannelMessages(channel: channel),
+      );
+      if (awaitHistory) {
+        await messageLoad;
+      } else {
+        unawaited(messageLoad);
+      }
     }
   }
 
@@ -6717,33 +6730,66 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   }
 
   Widget buildMobileShell() {
-    final body = mobileChatOpen
-        ? buildMainPane(onBack: () => setState(() => mobileChatOpen = false))
-        : mobileTabIndex == 0
-        ? buildMobileChannelList()
-        : buildMobileDirectList();
-    return PopScope(
-      canPop: !mobileChatOpen,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop && mobileChatOpen) {
-          setState(() => mobileChatOpen = false);
-        }
-      },
-      child: SafeArea(
-        child: ColoredBox(
-          color: OsColors.content,
-          child: Column(
-            children: [
-              Expanded(child: RepaintBoundary(child: body)),
-              if (!mobileChatOpen) ...[
-                RepaintBoundary(child: buildMobileVoiceStatusBar()),
-                RepaintBoundary(child: buildMobileNavigationBar()),
-              ],
-            ],
-          ),
+    return SafeArea(
+      child: NavigatorPopHandler<void>(
+        onPopWithResult: (_) {
+          final navigator = mobileNavigatorKey.currentState;
+          if (navigator != null) unawaited(navigator.maybePop());
+        },
+        child: Navigator(
+          key: mobileNavigatorKey,
+          pages: <Page<dynamic>>[
+            CupertinoPage<void>(
+              key: const ValueKey('mobile-home'),
+              child: ColoredBox(
+                color: OsColors.content,
+                child: Column(
+                  children: [
+                    Expanded(
+                      child: RepaintBoundary(
+                        child: mobileTabIndex == 0
+                            ? buildMobileChannelList()
+                            : buildMobileDirectList(),
+                      ),
+                    ),
+                    RepaintBoundary(child: buildMobileVoiceStatusBar()),
+                    RepaintBoundary(child: buildMobileNavigationBar()),
+                  ],
+                ),
+              ),
+            ),
+            if (mobileChatOpen)
+              CupertinoPage<void>(
+                key: const ValueKey('mobile-chat'),
+                child: ColoredBox(
+                  color: OsColors.content,
+                  child: RepaintBoundary(
+                    child: buildMainPane(onBack: closeMobileChat),
+                  ),
+                ),
+              ),
+          ],
+          onDidRemovePage: (page) {
+            if (page.key == const ValueKey('mobile-chat') &&
+                mobileChatOpen &&
+                mounted) {
+              setState(() => mobileChatOpen = false);
+            }
+          },
         ),
       ),
     );
+  }
+
+  void closeMobileChat() {
+    final navigator = mobileNavigatorKey.currentState;
+    if (navigator == null) {
+      if (mobileChatOpen) {
+        setState(() => mobileChatOpen = false);
+      }
+      return;
+    }
+    unawaited(navigator.maybePop());
   }
 
   Widget buildMobileServerHeader() {
@@ -6789,7 +6835,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   }
 
   Future<void> openMobileChannel(Channel channel, {bool join = false}) async {
-    await loadChannel(channel, join: join);
+    await loadChannel(channel, join: join, awaitHistory: false);
     if (!mounted ||
         selectedChannel?.id != channel.id ||
         chatScope != ChatScope.channel) {
@@ -9629,6 +9675,8 @@ class MobileChannelCard extends StatelessWidget {
                             style: IconButton.styleFrom(
                               backgroundColor: OsColors.sidebarBottom,
                               foregroundColor: OsColors.dim,
+                              overlayColor: Colors.transparent,
+                              splashFactory: NoSplash.splashFactory,
                               side: const BorderSide(
                                 color: OsColors.panelBorder,
                               ),

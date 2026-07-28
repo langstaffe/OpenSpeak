@@ -205,6 +205,12 @@ void main() {
       find.descendant(of: openButton, matching: find.byType(InkWell)),
       findsOneWidget,
     );
+    final openIconButton = tester.widget<IconButton>(openButton);
+    expect(openIconButton.style?.splashFactory, NoSplash.splashFactory);
+    expect(
+      openIconButton.style?.overlayColor?.resolve({WidgetState.pressed}),
+      Colors.transparent,
+    );
 
     final openIcon = find.descendant(
       of: openButton,
