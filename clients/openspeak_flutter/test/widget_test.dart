@@ -51,6 +51,16 @@ void main() {
     expect(useMobileWebLayout(isWeb: false, width: 320), isFalse);
   });
 
+  test('Web entry reserves the iOS left edge for Flutter navigation', () {
+    final entry = File('web/index.html').readAsStringSync();
+
+    expect(entry, contains('isIOSWebKit'));
+    expect(entry, contains('window.innerWidth < 720'));
+    expect(entry, contains('event.touches[0].clientX <= 20'));
+    expect(entry, contains('event.preventDefault()'));
+    expect(entry, contains('passive: false'));
+  });
+
   test('encrypted channel history loads each epoch key once', () {
     ChannelMessage message(String id, String epochId, String kind) =>
         ChannelMessage(

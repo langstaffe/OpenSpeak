@@ -15,6 +15,22 @@
 </head>
 <body>
   <div id="loading" role="status">OpenSpeak 正在加载，首次打开请稍候…</div>
+  <script>
+    (() => {
+      const isIOSWebKit = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+        (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+      if (isIOSWebKit) {
+        document.addEventListener('touchstart', (event) => {
+          if (window.innerWidth < 720 &&
+              event.touches.length === 1 &&
+              event.touches[0].clientX <= 20 &&
+              event.cancelable) {
+            event.preventDefault();
+          }
+        }, {capture: true, passive: false});
+      }
+    })();
+  </script>
   <script src="flutter_bootstrap.js" async></script>
 </body>
 </html>
