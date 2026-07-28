@@ -345,6 +345,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   final passwordController = TextEditingController();
   final activityScrollController = ScrollController();
   final channelScrollController = ScrollController();
+  final mobileChannelScrollController = ScrollController();
   final messageController = TextEditingController();
   final messageScrollController = ScrollController();
   final attachmentCache = AttachmentCacheService();
@@ -501,6 +502,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     passwordController.dispose();
     activityScrollController.dispose();
     channelScrollController.dispose();
+    mobileChannelScrollController.dispose();
     messageScrollController.removeListener(onMessageScroll);
     messageController.dispose();
     messageScrollController.dispose();
@@ -6822,43 +6824,48 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
           Expanded(
             child: channels.isEmpty
                 ? const ChatEmptyState(title: '还没有频道', subtitle: '当前没有可用频道')
-                : ListView.builder(
-                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
-                    itemCount: channels.length,
-                    itemBuilder: (context, index) {
-                      final channel = channels[index];
-                      return MobileChannelCard(
-                        channel: channel,
-                        selected: currentVoiceChannelId == channel.id,
-                        unreadCount:
-                            unreadState.channelUnreadCounts[channel.id] ?? 0,
-                        mentionCount:
-                            unreadState.channelMentionCounts[channel.id] ?? 0,
-                        members: presence.users
-                            .where(
-                              (user) =>
-                                  user.online &&
-                                  user.currentChannelId == channel.id,
-                            )
-                            .toList(),
-                        voiceStatesByUserId: voiceStatesByUserId,
-                        api: api,
-                        avatarToken: session?.token,
-                        onOpen: () => unawaited(openMobileChannel(channel)),
-                        onDoubleTap: () =>
-                            unawaited(loadChannel(channel, join: true)),
-                        onLongPressStart:
-                            hasServerPermission('channel.edit') ||
-                                hasServerPermission('channel.delete')
-                            ? (details) => unawaited(
-                                showChannelContextMenu(
-                                  details.globalPosition,
-                                  channel: channel,
-                                ),
+                : SmoothWheelScroll(
+                    controller: mobileChannelScrollController,
+                    child: ListView.builder(
+                      controller: mobileChannelScrollController,
+                      physics: smoothWheelChildPhysics,
+                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
+                      itemCount: channels.length,
+                      itemBuilder: (context, index) {
+                        final channel = channels[index];
+                        return MobileChannelCard(
+                          channel: channel,
+                          selected: currentVoiceChannelId == channel.id,
+                          unreadCount:
+                              unreadState.channelUnreadCounts[channel.id] ?? 0,
+                          mentionCount:
+                              unreadState.channelMentionCounts[channel.id] ?? 0,
+                          members: presence.users
+                              .where(
+                                (user) =>
+                                    user.online &&
+                                    user.currentChannelId == channel.id,
                               )
-                            : null,
-                      );
-                    },
+                              .toList(),
+                          voiceStatesByUserId: voiceStatesByUserId,
+                          api: api,
+                          avatarToken: session?.token,
+                          onOpen: () => unawaited(openMobileChannel(channel)),
+                          onDoubleTap: () =>
+                              unawaited(loadChannel(channel, join: true)),
+                          onLongPressStart:
+                              hasServerPermission('channel.edit') ||
+                                  hasServerPermission('channel.delete')
+                              ? (details) => unawaited(
+                                  showChannelContextMenu(
+                                    details.globalPosition,
+                                    channel: channel,
+                                  ),
+                                )
+                              : null,
+                        );
+                      },
+                    ),
                   ),
           ),
         ],
