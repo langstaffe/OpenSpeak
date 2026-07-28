@@ -36,6 +36,7 @@ import 'package:openspeak_flutter/server_settings.dart';
 import 'package:openspeak_flutter/smooth_scroll.dart';
 import 'package:openspeak_flutter/sound_effects.dart';
 import 'package:openspeak_flutter/unread_state_controller.dart';
+import 'package:openspeak_flutter/voice_controls.dart';
 import 'package:openspeak_flutter/voice_session_controller.dart';
 
 void main() {
