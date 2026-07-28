@@ -70,4 +70,54 @@ void main() {
     expect(removed.toUserId, 'recipient');
     expect(removed.sentAt, sentAt);
   });
+
+  test('direct message store merges, retracts, expires, and resets', () {
+    final store = DirectMessageStore();
+    final local = directMessage('local', sentAt: DateTime.utc(2026, 7, 17, 2));
+    final first = directMessage('first', sentAt: DateTime.utc(2026, 7, 17, 1));
+    final last = directMessage('last', sentAt: DateTime.utc(2026, 7, 17, 3));
+
+    store.add('peer', local);
+    expect(
+      store.addIncoming(
+        'peer',
+        first,
+        pending: false,
+        removeWhere: (message) => message.id == 'local',
+      ),
+      ['local'],
+    );
+    store.addIncoming('peer', last, pending: true, removeWhere: (_) => false);
+    store.markRetracted('peer', 'last');
+    store.mergePending('peer');
+    expect(store.messagesFor('peer').map((message) => message.id), [
+      'first',
+      'last',
+    ]);
+    expect(store.messagesFor('peer').last.kind, 'removed');
+
+    store.markRetracted('peer', 'first');
+    store.markFileExpired('file');
+    expect(store.messagesFor('peer').first.kind, 'removed');
+    expect(store.isFileExpired('file'), isTrue);
+
+    store.reset();
+    expect(store.messagesFor('peer'), isEmpty);
+    expect(store.isFileExpired('file'), isFalse);
+  });
 }
+
+DirectMessage directMessage(String id, {required DateTime sentAt}) =>
+    DirectMessage(
+      id: id,
+      fromUserId: 'sender',
+      toUserId: 'recipient',
+      kind: 'text',
+      body: id,
+      fileId: '',
+      originalName: '',
+      contentType: '',
+      sizeBytes: 0,
+      expiresAt: null,
+      sentAt: sentAt,
+    );

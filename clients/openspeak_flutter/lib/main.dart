@@ -759,10 +759,8 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   final directMessageKeys = <String, SecretKeyData>{};
   E2EEDeviceIdentity? e2eeDeviceIdentity;
   String? mediaKeyReadyTransition;
-  final directMessages = <String, List<DirectMessage>>{};
-  final pendingDirectMessages = <String, List<DirectMessage>>{};
+  final directMessageStore = DirectMessageStore();
   final unreadState = UnreadStateController();
-  final expiredDirectFileIds = <String>{};
   final attachmentTransfers = AttachmentTransferController();
   final imagePreviewFutures = <String, Future<CachedImagePreview>>{};
   final linkPreviewFutures = <String, Future<LinkPreview?>>{};
@@ -1367,8 +1365,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       channelKeys.clear();
       directMessageKeys.clear();
       e2eeDeviceIdentity = null;
-      directMessages.clear();
-      pendingDirectMessages.clear();
+      directMessageStore.reset();
       unreadState.reset();
       currentChatNewMessages = 0;
       attachmentTransfers.localSources.clear();
@@ -1799,8 +1796,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       channelMessages.clear();
       channelKeys.clear();
       directMessageKeys.clear();
-      directMessages.clear();
-      pendingDirectMessages.clear();
+      directMessageStore.reset();
       unreadState.reset(serverId: server.id, userId: auth.user.id);
       currentChatNewMessages = 0;
       attachmentTransfers.localSources.clear();
@@ -3570,24 +3566,18 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     final mine = message.fromUserId == auth.user.id;
     final deferVisibleInsert = activeDirect && !wasAtBottom && !mine;
     setState(() {
-      final messages = deferVisibleInsert
-          ? pendingDirectMessages.putIfAbsent(peerId, () => [])
-          : directMessages.putIfAbsent(peerId, () => []);
-      final removedLocalIds = <String>[];
-      messages.removeWhere((item) {
-        final matches =
+      final removedLocalIds = directMessageStore.addIncoming(
+        peerId,
+        message,
+        pending: deferVisibleInsert,
+        removeWhere: (item) =>
             attachmentTransfers.pendingLocalUploads.contains(item.id) &&
             item.fromUserId == message.fromUserId &&
             item.toUserId == message.toUserId &&
             item.kind == message.kind &&
             item.originalName == message.originalName &&
-            item.sizeBytes == message.sizeBytes;
-        if (matches) removedLocalIds.add(item.id);
-        return matches;
-      });
-      if (!messages.any((item) => item.id == message.id)) {
-        messages.add(message);
-      }
+            item.sizeBytes == message.sizeBytes,
+      );
       for (final id in removedLocalIds) {
         attachmentTransfers.removeLocalUpload(id);
         imagePreviewFutures.remove(id);
@@ -3657,7 +3647,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     final fileId = event.payload['file_id'] as String? ?? '';
     if (fileId.isEmpty) return;
     setState(() {
-      expiredDirectFileIds.add(fileId);
+      directMessageStore.markFileExpired(fileId);
       attachmentTransfers.cancelDownload(fileId);
     });
   }
@@ -3672,19 +3662,8 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     if (peerId.isEmpty) return;
     setState(() {
       directMessageKeys.remove(messageId);
-      markDirectMessageRetracted(peerId, messageId);
+      directMessageStore.markRetracted(peerId, messageId);
     });
-  }
-
-  void markDirectMessageRetracted(String peerId, String messageId) {
-    for (final messages in [
-      directMessages[peerId],
-      pendingDirectMessages[peerId],
-    ]) {
-      if (messages == null) continue;
-      final index = messages.indexWhere((message) => message.id == messageId);
-      if (index >= 0) messages[index] = messages[index].retracted();
-    }
   }
 
   void retractDirectMessage(DirectMessage message) {
@@ -3709,7 +3688,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   List<DirectMessage> selectedDirectMessages() {
     final peer = selectedDirectUser();
     if (peer == null) return const [];
-    return directMessages[peer.userId] ?? const [];
+    return directMessageStore.messagesFor(peer.userId);
   }
 
   Future<void> pickAndUploadAttachment() async {
@@ -3988,8 +3967,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         : null;
     if (mounted && localMessage != null) {
       setState(() {
-        final messages = directMessages.putIfAbsent(task.targetId, () => []);
-        messages.add(localMessage);
+        directMessageStore.add(task.targetId, localMessage);
       });
       if (chatScope == ChatScope.direct &&
           selectedDirectUserId == task.targetId) {
@@ -4168,8 +4146,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   void removeOptimisticDirectMessage(String peerId, String localId) {
     attachmentTransfers.removeLocalUpload(localId);
     audioMetadataFutures.remove(localId);
-    final messages = directMessages[peerId];
-    messages?.removeWhere((message) => message.id == localId);
+    directMessageStore.remove(peerId, localId);
   }
 
   Future<void> seedUploadedAttachmentCache({
@@ -4311,7 +4288,9 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       } catch (exception) {
         if (attachment.direct && isDirectFileExpiredError(exception)) {
           if (mounted) {
-            setState(() => expiredDirectFileIds.add(attachment.fileId));
+            setState(
+              () => directMessageStore.markFileExpired(attachment.fileId),
+            );
           }
           throw OpenSpeakException('文件已过期');
         }
@@ -4351,7 +4330,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     } catch (e) {
       if (attachment.direct && isDirectFileExpiredError(e)) {
         if (mounted) {
-          setState(() => expiredDirectFileIds.add(attachment.fileId));
+          setState(() => directMessageStore.markFileExpired(attachment.fileId));
         }
         throw OpenSpeakException('文件已过期');
       }
@@ -4552,7 +4531,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       }
       setState(() {
         if (attachment.direct && isDirectFileExpiredError(e)) {
-          expiredDirectFileIds.add(attachment.fileId);
+          directMessageStore.markFileExpired(attachment.fileId);
           attachmentTransfers.downloads.remove(attachment.fileId);
           error = '文件已过期';
         } else {
@@ -4711,7 +4690,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       if (!mounted) return;
       if (attachment.direct && isDirectFileExpiredError(exception)) {
         setState(() {
-          expiredDirectFileIds.add(attachment.fileId);
+          directMessageStore.markFileExpired(attachment.fileId);
           error = '文件已过期';
         });
       } else {
@@ -4957,25 +4936,9 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     }
     final userId = selectedDirectUserId;
     if (userId != null) {
-      mergePendingDirectMessages(userId);
+      directMessageStore.mergePending(userId);
       unreadState.clearDirect(userId);
     }
-  }
-
-  void mergePendingDirectMessages(String userId) {
-    final pending = pendingDirectMessages.remove(userId);
-    if (pending == null || pending.isEmpty) return;
-    final messages = directMessages.putIfAbsent(userId, () => []);
-    for (final message in pending) {
-      if (!messages.any((item) => item.id == message.id)) {
-        messages.add(message);
-      }
-    }
-    messages.sort(
-      (a, b) => (a.sentAt ?? DateTime.fromMillisecondsSinceEpoch(0)).compareTo(
-        b.sentAt ?? DateTime.fromMillisecondsSinceEpoch(0),
-      ),
-    );
   }
 
   void clearChannelUnread(String channelId) {
@@ -4989,7 +4952,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   }
 
   void clearDirectUnread(String userId) {
-    mergePendingDirectMessages(userId);
+    directMessageStore.mergePending(userId);
     unreadState.clearDirect(userId);
     clearCurrentChatNewMessageHint();
   }
@@ -9514,7 +9477,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       nonce: message.nonce,
       attachmentFormat: message.attachmentFormat,
       expiresAt: message.expiresAt,
-      expired: expiredDirectFileIds.contains(message.fileId),
+      expired: directMessageStore.isFileExpired(message.fileId),
     );
   }
 
