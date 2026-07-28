@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:file_selector/file_selector.dart';
@@ -113,6 +114,8 @@ class TransferTask {
 class AttachmentTransferController {
   final uploads = <TransferTask>[];
   final downloads = <String, TransferTask>{};
+  final localSources = <String, File>{};
+  final pendingLocalUploads = <String>{};
   bool _uploadQueueRunning = false;
 
   TransferTask? get nextQueuedUpload {
@@ -176,6 +179,29 @@ class AttachmentTransferController {
 
   void cancelDownload(String fileId) {
     downloads.remove(fileId)?.cancelToken.cancel();
+  }
+
+  void registerLocalSource(
+    String fileId,
+    File file, {
+    int expectedSizeBytes = 0,
+    void Function()? onInvalid,
+  }) {
+    if (fileId.isEmpty) return;
+    localSources[fileId] = file;
+    if (expectedSizeBytes <= 0) return;
+    file.length().then((length) {
+      if (length != expectedSizeBytes &&
+          identical(localSources[fileId], file)) {
+        localSources.remove(fileId);
+        onInvalid?.call();
+      }
+    });
+  }
+
+  void removeLocalUpload(String fileId) {
+    pendingLocalUploads.remove(fileId);
+    localSources.remove(fileId);
   }
 
   void cancelAndClear() {

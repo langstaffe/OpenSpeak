@@ -764,11 +764,9 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   final unreadState = UnreadStateController();
   final expiredDirectFileIds = <String>{};
   final attachmentTransfers = AttachmentTransferController();
-  final localAttachmentSources = <String, File>{};
   final imagePreviewFutures = <String, Future<CachedImagePreview>>{};
   final linkPreviewFutures = <String, Future<LinkPreview?>>{};
   final audioMetadataFutures = <String, Future<AudioAttachmentMetadata>>{};
-  final pendingLocalUploads = <String>{};
   List<SavedServerConnection> savedConnections = [];
   SavedServerConnection? selectedConnection;
   String localDisplayName = 'user';
@@ -1373,7 +1371,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       pendingDirectMessages.clear();
       unreadState.reset();
       currentChatNewMessages = 0;
-      localAttachmentSources.clear();
+      attachmentTransfers.localSources.clear();
       imagePreviewFutures.clear();
       linkPreviewFutures.clear();
       audioMetadataFutures.clear();
@@ -1805,11 +1803,11 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       pendingDirectMessages.clear();
       unreadState.reset(serverId: server.id, userId: auth.user.id);
       currentChatNewMessages = 0;
-      localAttachmentSources.clear();
+      attachmentTransfers.localSources.clear();
       imagePreviewFutures.clear();
       linkPreviewFutures.clear();
       audioMetadataFutures.clear();
-      pendingLocalUploads.clear();
+      attachmentTransfers.pendingLocalUploads.clear();
       attachmentTransfers.cancelAndClear();
       presence = PresenceSnapshot.empty(serverId: server.id);
       currentServerRole = 'user';
@@ -3196,7 +3194,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
             .where(
               (message) =>
                   message.channelId == target.id &&
-                  pendingLocalUploads.contains(message.id),
+                  attachmentTransfers.pendingLocalUploads.contains(message.id),
             )
             .toList();
         channelMessages
@@ -3224,7 +3222,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   void handleChannelMessageDeleted(RealtimeEvent event) {
     final messageId = event.payload['message_id'] as String? ?? '';
     if (messageId.isEmpty || event.channelId != selectedChannel?.id) return;
-    setState(() => pendingLocalUploads.remove(messageId));
+    setState(() => attachmentTransfers.pendingLocalUploads.remove(messageId));
     unawaited(loadChannelMessages(scrollToEnd: false));
   }
 
@@ -3254,7 +3252,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     final action = channelMessageContextAction(
       mine: message.senderUserId == session?.user.id,
       canManageOthers: hasServerPermission('channel.messages.manage'),
-      pending: pendingLocalUploads.contains(message.id),
+      pending: attachmentTransfers.pendingLocalUploads.contains(message.id),
       canRetractOwn: canRetractChannelMessage(message),
     );
     if (action == null) return;
@@ -3578,7 +3576,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       final removedLocalIds = <String>[];
       messages.removeWhere((item) {
         final matches =
-            pendingLocalUploads.contains(item.id) &&
+            attachmentTransfers.pendingLocalUploads.contains(item.id) &&
             item.fromUserId == message.fromUserId &&
             item.toUserId == message.toUserId &&
             item.kind == message.kind &&
@@ -3591,8 +3589,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         messages.add(message);
       }
       for (final id in removedLocalIds) {
-        pendingLocalUploads.remove(id);
-        localAttachmentSources.remove(id);
+        attachmentTransfers.removeLocalUpload(id);
         imagePreviewFutures.remove(id);
         audioMetadataFutures.remove(id);
       }
@@ -4117,7 +4114,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     final fileId = createLocalAttachmentId();
     final originalName = desktopFileNameFor(file);
     registerLocalAttachmentSource(fileId, file, expectedSizeBytes: sizeBytes);
-    pendingLocalUploads.add(fileId);
+    attachmentTransfers.pendingLocalUploads.add(fileId);
     return ChannelMessage(
       id: fileId,
       channelId: channelId,
@@ -4146,7 +4143,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     final fileId = createLocalAttachmentId();
     final originalName = desktopFileNameFor(file);
     registerLocalAttachmentSource(fileId, file, expectedSizeBytes: sizeBytes);
-    pendingLocalUploads.add(fileId);
+    attachmentTransfers.pendingLocalUploads.add(fileId);
     return DirectMessage(
       id: fileId,
       fromUserId: fromUserId,
@@ -4163,15 +4160,13 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   }
 
   void removeOptimisticChannelMessage(String localId) {
-    pendingLocalUploads.remove(localId);
-    localAttachmentSources.remove(localId);
+    attachmentTransfers.removeLocalUpload(localId);
     audioMetadataFutures.remove(localId);
     channelMessages.removeWhere((message) => message.id == localId);
   }
 
   void removeOptimisticDirectMessage(String peerId, String localId) {
-    pendingLocalUploads.remove(localId);
-    localAttachmentSources.remove(localId);
+    attachmentTransfers.removeLocalUpload(localId);
     audioMetadataFutures.remove(localId);
     final messages = directMessages[peerId];
     messages?.removeWhere((message) => message.id == localId);
@@ -4203,18 +4198,16 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     int expectedSizeBytes = 0,
   }) {
     if (fileId.isEmpty) return;
-    localAttachmentSources[fileId] = file;
     audioMetadataFutures.remove(fileId);
-    if (expectedSizeBytes > 0) {
-      file.length().then((length) {
-        if (length != expectedSizeBytes &&
-            identical(localAttachmentSources[fileId], file)) {
-          localAttachmentSources.remove(fileId);
-          imagePreviewFutures.remove(fileId);
-          audioMetadataFutures.remove(fileId);
-        }
-      });
-    }
+    attachmentTransfers.registerLocalSource(
+      fileId,
+      file,
+      expectedSizeBytes: expectedSizeBytes,
+      onInvalid: () {
+        imagePreviewFutures.remove(fileId);
+        audioMetadataFutures.remove(fileId);
+      },
+    );
   }
 
   void addOrReplaceChannelMessage(ChannelMessage message) {
@@ -4256,7 +4249,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     if (attachment.expired) {
       throw OpenSpeakException('文件已过期');
     }
-    final localSource = localAttachmentSources[attachment.fileId];
+    final localSource = attachmentTransfers.localSources[attachment.fileId];
     if (localSource != null &&
         await localSource.exists() &&
         (attachment.sizeBytes <= 0 ||
@@ -4624,7 +4617,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     ChatAttachment attachment,
   ) async {
     if (!kIsWeb) {
-      final localSource = localAttachmentSources[attachment.fileId];
+      final localSource = attachmentTransfers.localSources[attachment.fileId];
       if (localSource != null && await localSource.exists()) {
         return readAudioAttachmentMetadataFromFile(localSource);
       }
@@ -4729,7 +4722,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
 
   Future<File?> localAudioSourceFile(ChatAttachment attachment) async {
     if (kIsWeb) return null;
-    final localSource = localAttachmentSources[attachment.fileId];
+    final localSource = attachmentTransfers.localSources[attachment.fileId];
     if (localSource != null && await localSource.exists()) {
       return localSource;
     }
@@ -9283,7 +9276,9 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                 ? null
                 : directMessageContextAction(
                     mine: mine,
-                    pending: pendingLocalUploads.contains(message.id),
+                    pending: attachmentTransfers.pendingLocalUploads.contains(
+                      message.id,
+                    ),
                   );
             return ChatMessageEntry(
               key: ValueKey('direct-${message.id}'),
@@ -9385,7 +9380,9 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                   canManageOthers: hasServerPermission(
                     'channel.messages.manage',
                   ),
-                  pending: pendingLocalUploads.contains(message.id),
+                  pending: attachmentTransfers.pendingLocalUploads.contains(
+                    message.id,
+                  ),
                   canRetractOwn: canRetractChannelMessage(message),
                 );
           return ChatMessageEntry(
