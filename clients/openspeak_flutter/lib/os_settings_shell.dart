@@ -1290,3 +1290,26 @@ class OsFormCard extends StatelessWidget {
     );
   }
 }
+
+class ActivationHint extends StatelessWidget {
+  const ActivationHint({super.key, required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Icon(Icons.info_outline_rounded, size: 15, color: OsColors.dim),
+        const SizedBox(width: 7),
+        Expanded(
+          child: Text(
+            text,
+            style: const TextStyle(color: OsColors.dim, fontSize: 10),
+          ),
+        ),
+      ],
+    );
+  }
+}

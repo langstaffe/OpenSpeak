@@ -12,12 +12,7 @@ import 'package:flutter/foundation.dart' show defaultTargetPlatform, kIsWeb;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'
-    show
-        BrowserContextMenu,
-        Clipboard,
-        ClipboardData,
-        FilteringTextInputFormatter,
-        LengthLimitingTextInputFormatter;
+    show BrowserContextMenu, Clipboard, ClipboardData;
 import 'package:flutter_webrtc/flutter_webrtc.dart' as rtc;
 import 'package:http/http.dart' as http;
 import 'package:livekit_client/livekit_client.dart' as lk;
@@ -159,21 +154,6 @@ List<String> encryptedChannelMessageEpochIds(
     .map((message) => message.epochId)
     .toSet()
     .toList(growable: false);
-
-enum TlsCertificateHealth { unknown, valid, expiring, expired }
-
-TlsCertificateHealth tlsCertificateHealth(
-  DateTime? expiresAt, {
-  DateTime? now,
-}) {
-  if (expiresAt == null) return TlsCertificateHealth.unknown;
-  final remaining = expiresAt.difference(now ?? DateTime.now());
-  if (remaining <= Duration.zero) return TlsCertificateHealth.expired;
-  if (remaining < const Duration(hours: 24)) {
-    return TlsCertificateHealth.expiring;
-  }
-  return TlsCertificateHealth.valid;
-}
 
 enum SavedServerMenuAction { edit, delete }
 
@@ -5278,8 +5258,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         if (mounted) setState(() => error = '$exception');
       }
     }
-    final adminPermissions = <String>{...?permissionSettings?.admin};
-    final userPermissions = <String>{...?permissionSettings?.user};
     WebSettings? webSettings;
     if (isOwner) {
       try {
@@ -5299,9 +5277,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         return;
       }
     }
-    var retractWindowMinutes =
-        permissionSettings?.messageRetractWindowMinutes ??
-        messageRetractWindowMinutes;
     if (!mounted) return;
 
     File? cachedServerAvatar;
@@ -5325,1271 +5300,281 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     }
     if (!mounted || selectedServer?.id != server.id) return;
 
-    final serverNameController = TextEditingController(text: serverName);
-    final retentionController = TextEditingController(
-      text: '${settingsServer.historyRetentionDays}',
+    final result = await showDialog<ServerSettingsDialogResult>(
+      context: context,
+      barrierColor: const Color(0xC7000000),
+      builder: (_) => OsServerSettingsDialog(
+        api: client,
+        authToken: auth.token,
+        serverId: server.id,
+        serverName: serverName,
+        server: settingsServer,
+        channels: channels,
+        mediaNodes: mediaNodes,
+        fileNodes: fileNodes,
+        permissionSettings: permissionSettings,
+        currentMessageRetractWindowMinutes: messageRetractWindowMinutes,
+        webSettings: webSettings,
+        ownerStatus: ownerStatus,
+        isOwner: isOwner,
+        canEditProfile: canEditProfile,
+        allowedPages: allowedPages,
+        initialPage: initialPage,
+        cachedServerAvatar: cachedServerAvatar,
+      ),
     );
-    final passwordController = TextEditingController();
-    final tlsIdentifierController = TextEditingController(
-      text: settingsServer.tlsIdentifier,
-    );
-    final activeMediaNode = mediaNodes
-        .where((node) => node.enabled && !node.draining)
-        .firstOrNull;
-    final configuredMediaNode =
-        mediaNodes
-            .where((node) => !node.isLocal && node.enabled && !node.draining)
-            .firstOrNull ??
-        mediaNodes.where((node) => !node.isLocal).firstOrNull;
-    final selectedMediaNodeId = configuredMediaNode?.id;
-    var screenRelayMode = activeMediaNode == null || activeMediaNode.isLocal
-        ? 'local'
-        : 'external';
-    final mediaNodeName = configuredMediaNode?.name ?? '外部屏幕共享节点';
-    final configuredMediaNodeUri = Uri.tryParse(
-      configuredMediaNode?.liveKitUrl ?? '',
-    );
-    final mediaNodePath = configuredMediaNode == null
-        ? ''
-        : configuredMediaNodeUri?.path ?? '';
-    final mediaNodeHostController = TextEditingController(
-      text: configuredMediaNodeUri?.host ?? '',
-    );
-    final mediaNodePortController = TextEditingController(
-      text: configuredMediaNodeUri?.hasPort == true
-          ? '${configuredMediaNodeUri!.port}'
-          : '27412',
-    );
-    final mediaNodeKeyController = TextEditingController(
-      text: configuredMediaNode?.apiKey ?? '',
-    );
-    final mediaNodeSecretController = TextEditingController();
-
-    final configuredFileNode =
-        fileNodes
-            .where((node) => node.id == settingsServer.attachmentFileNodeId)
-            .firstOrNull ??
-        fileNodes.where((node) => node.enabled).firstOrNull ??
-        fileNodes.firstOrNull;
-    final selectedFileNodeId = configuredFileNode?.id;
-    final configuredFileNodeUri = Uri.tryParse(
-      configuredFileNode?.baseUrl ?? '',
-    );
-    final fileNodePath = configuredFileNode == null
-        ? '/files'
-        : configuredFileNodeUri?.path ?? '';
-    final fileNodeHostController = TextEditingController(
-      text: configuredFileNodeUri?.host ?? '',
-    );
-    final fileNodePortController = TextEditingController(
-      text: configuredFileNodeUri?.hasPort == true
-          ? '${configuredFileNodeUri!.port}'
-          : '27412',
-    );
-    final fileNodeSecretController = TextEditingController();
-
-    File? pendingServerAvatar;
-    var selectedPage = allowedPages.contains(initialPage)
-        ? initialPage
-        : allowedPages.first;
-    var defaultChannelId =
-        settingsServer.defaultChannelId ?? channels.firstOrNull?.id;
-    var clearServerPassword = false;
-    var encryptionMode = settingsServer.encryptionMode;
-    var tlsCertificateType = settingsServer.tlsCertificateType.isEmpty
-        ? 'domain'
-        : settingsServer.tlsCertificateType;
-    final tlsHealth = tlsCertificateHealth(settingsServer.tlsExpiresAt);
-    final tlsExpiry = settingsServer.tlsExpiresAt
-        ?.toLocal()
-        .toString()
-        .split('.')
-        .first;
-    final tlsRenewal = settingsServer.tlsRenewalAt
-        ?.toLocal()
-        .toString()
-        .split('.')
-        .first;
-    final tlsActive = settingsServer.tlsStatus == 'active';
-    final tlsStatusText = tlsActive
-        ? tlsHealth == TlsCertificateHealth.expired
-              ? '证书已过期，有效期至 ${tlsExpiry ?? '未知'}；Caddy 将继续自动重试续签'
-              : '证书已启用，有效期至 ${tlsExpiry ?? '未知'}；下次续签时间 ${tlsRenewal ?? '由 Caddy 自动安排'}'
-        : settingsServer.tlsError.isNotEmpty
-        ? '上次启用失败：${settingsServer.tlsError}'
-        : '保存时将检查网络、申请证书，并在 HTTPS/WSS 自检通过后切换。';
-    final tlsStatusColor = !tlsActive
-        ? OsColors.dim
-        : switch (tlsHealth) {
-            TlsCertificateHealth.valid => OsColors.green,
-            TlsCertificateHealth.expiring => OsColors.warning,
-            TlsCertificateHealth.expired => OsColors.danger,
-            TlsCertificateHealth.unknown => OsColors.dim,
-          };
-    var tlsDetectionError = '';
-    var voiceAudioBitrateKbps = settingsServer.voiceAudioBitrateKbps;
-    const screenShareBitrateRows = [
-      ('720p', '720p'),
-      ('1080p', '1080p'),
-      ('source', 'Source'),
-    ];
-    const screenShareBitrateFps = [15, 30, 60];
-    final screenShareBitrateControllers = {
-      for (final row in screenShareBitrateRows)
-        for (final fps in screenShareBitrateFps)
-          (row.$1, fps): TextEditingController(
-            text:
-                '${settingsServer.screenShareBitrateLimits.bitrateMbps(row.$1, fps)}',
-          ),
-    };
-    var attachmentMode = settingsServer.attachmentExternalEnabled
-        ? 'external'
-        : 'local';
-    var webEnabled = webSettings?.enabled ?? false;
-    var webCustomPathEnabled = webSettings?.customPathEnabled ?? true;
-    final webPathController = TextEditingController(
-      text: webSettings?.path ?? 'chat',
-    );
-    final savedWebUri = Uri.tryParse(webSettings?.accessUrl ?? '');
-    final webOrigin = savedWebUri != null && savedWebUri.host.isNotEmpty
-        ? savedWebUri.replace(path: '/', query: null, fragment: null).toString()
-        : settingsServer.tlsIdentifier.isEmpty
-        ? 'https://服务器:27412/'
-        : Uri(
-            scheme: 'https',
-            host: settingsServer.tlsIdentifier,
-            port: 27412,
-            path: '/',
-          ).toString();
-    try {
-      final action = await showDialog<String>(
-        context: context,
-        barrierColor: const Color(0xC7000000),
-        builder: (context) => StatefulBuilder(
-          builder: (context, setDialogState) => OsSettingsDialog(
-            icon: Icons.dns_rounded,
-            eyebrow: '',
-            title: '服务器设置',
-            subtitle: serverName,
-            compactHeader: true,
-            maxWidth: 920,
-            child: OsSplitSettingsBody(
-              navigation: [
-                if (allowedPages.contains('overview'))
-                  OsSettingsNavEntry(
-                    icon: Icons.dashboard_outlined,
-                    label: '服务器概览',
-                    selected: selectedPage == 'overview',
-                    onTap: () =>
-                        setDialogState(() => selectedPage = 'overview'),
-                  ),
-                if (allowedPages.contains('general'))
-                  OsSettingsNavEntry(
-                    icon: Icons.tune_rounded,
-                    label: '常规设置',
-                    selected: selectedPage == 'general',
-                    onTap: () => setDialogState(() => selectedPage = 'general'),
-                  ),
-                if (allowedPages.contains('transport'))
-                  OsSettingsNavEntry(
-                    icon: Icons.security_rounded,
-                    label: '传输与安全',
-                    selected: selectedPage == 'transport',
-                    onTap: () =>
-                        setDialogState(() => selectedPage = 'transport'),
-                  ),
-                if (allowedPages.contains('audit'))
-                  OsSettingsNavEntry(
-                    icon: Icons.history_rounded,
-                    label: '审计日志',
-                    selected: selectedPage == 'audit',
-                    onTap: () => setDialogState(() => selectedPage = 'audit'),
-                  ),
-                if (allowedPages.contains('owner'))
-                  OsSettingsNavEntry(
-                    icon: Icons.devices_rounded,
-                    label: '设备与会话',
-                    selected: selectedPage == 'owner',
-                    onTap: () => setDialogState(() => selectedPage = 'owner'),
-                  ),
-                if (allowedPages.contains('permissions'))
-                  OsSettingsNavEntry(
-                    icon: Icons.admin_panel_settings_outlined,
-                    label: '服务器权限管理',
-                    selected: selectedPage == 'permissions',
-                    onTap: () =>
-                        setDialogState(() => selectedPage = 'permissions'),
-                  ),
-                if (allowedPages.contains('web'))
-                  OsSettingsNavEntry(
-                    icon: Icons.language_rounded,
-                    label: '网页端设置',
-                    selected: selectedPage == 'web',
-                    onTap: () => setDialogState(() => selectedPage = 'web'),
-                  ),
-              ],
-              content: switch (selectedPage) {
-                'web' => OsSettingsPage(
-                  icon: Icons.language_rounded,
-                  title: '网页端设置',
-                  subtitle: '网页端与主服务器共用 HTTPS 端口，并沿用当前附件承载配置。',
-                  footer: Align(
-                    alignment: Alignment.centerRight,
-                    child: OsPrimaryButton(
-                      label: '保存更改',
-                      icon: Icons.check_rounded,
-                      onPressed: () => Navigator.pop(context, 'save-web'),
-                    ),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      OsFormCard(
-                        icon: Icons.public_rounded,
-                        title: '网页入口',
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            SwitchListTile(
-                              contentPadding: EdgeInsets.zero,
-                              title: const Text('启用网页端'),
-                              subtitle: const Text('关闭后网页入口不可访问，现有网页会话也会断开'),
-                              value: webEnabled,
-                              onChanged: (value) =>
-                                  setDialogState(() => webEnabled = value),
-                            ),
-                            const Divider(height: 20),
-                            SwitchListTile(
-                              contentPadding: EdgeInsets.zero,
-                              title: const Text('使用自定义访问路径'),
-                              subtitle: const Text('开启后根地址保持空白，只能通过下方路径进入'),
-                              value: webCustomPathEnabled,
-                              onChanged: (value) => setDialogState(
-                                () => webCustomPathEnabled = value,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            TextField(
-                              controller: webPathController,
-                              enabled: webCustomPathEnabled,
-                              inputFormatters: [
-                                FilteringTextInputFormatter.allow(
-                                  RegExp(r'[A-Za-z0-9_-]'),
-                                ),
-                                LengthLimitingTextInputFormatter(64),
-                              ],
-                              decoration: const InputDecoration(
-                                labelText: '自定义路径',
-                                prefixText: '/',
-                                helperText: '不能使用 api、ws 或 rtc',
-                              ),
-                              onChanged: (_) => setDialogState(() {}),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      OsFormCard(
-                        icon: Icons.link_rounded,
-                        title: '访问地址',
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            SelectableText(
-                              webCustomPathEnabled
-                                  ? '$webOrigin${webPathController.text}/'
-                                  : webOrigin,
-                              style: const TextStyle(
-                                color: OsColors.text,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            ActivationHint(
-                              text: webSettings?.assetsAvailable == false
-                                  ? '当前服务器尚未安装网页资源，安装后才能启用。'
-                                  : '网页端自动使用“传输与安全”中的附件承载方式，不提供单独节点配置。',
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                'permissions' => OsServerPermissionsPage(
-                  adminPermissions: adminPermissions,
-                  userPermissions: userPermissions,
-                  messageRetractWindowMinutes: retractWindowMinutes,
-                  onChanged: (role, permission, enabled) {
-                    setDialogState(() {
-                      final values = role == 'admin'
-                          ? adminPermissions
-                          : userPermissions;
-                      if (enabled) {
-                        values.add(permission);
-                      } else {
-                        values.remove(permission);
-                      }
-                    });
-                  },
-                  onMessageRetractWindowChanged: (value) =>
-                      setDialogState(() => retractWindowMinutes = value),
-                  onSave: () => Navigator.pop(context, 'save-permissions'),
-                ),
-                'general' => OsSettingsPage(
-                  icon: Icons.tune_rounded,
-                  title: '常规设置',
-                  subtitle: '设置默认频道、消息保留时间和服务器密码。',
-                  footer: Align(
-                    alignment: Alignment.centerRight,
-                    child: OsPrimaryButton(
-                      label: '保存更改',
-                      icon: Icons.check_rounded,
-                      onPressed: () => Navigator.pop(context, 'save-general'),
-                    ),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      OsFormCard(
-                        icon: Icons.tag_rounded,
-                        title: '默认频道',
-                        child: DropdownButtonFormField<String>(
-                          initialValue: defaultChannelId,
-                          items: [
-                            for (final channel in channels)
-                              DropdownMenuItem(
-                                value: channel.id,
-                                child: Text(channel.name),
-                              ),
-                          ],
-                          onChanged: (value) => defaultChannelId = value,
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      OsFormCard(
-                        icon: Icons.history_rounded,
-                        title: '消息历史',
-                        child: TextField(
-                          controller: retentionController,
-                          keyboardType: TextInputType.number,
-                          inputFormatters: [
-                            FilteringTextInputFormatter.digitsOnly,
-                          ],
-                          decoration: const InputDecoration(
-                            labelText: '保留天数',
-                            helperText: '0 表示不保留历史消息',
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      OsFormCard(
-                        icon: Icons.password_rounded,
-                        title: '服务器密码',
-                        child: Column(
-                          children: [
-                            TextField(
-                              controller: passwordController,
-                              obscureText: true,
-                              enabled: !clearServerPassword,
-                              decoration: InputDecoration(
-                                labelText: settingsServer.passwordProtected
-                                    ? '输入新密码；留空则保持不变'
-                                    : '设置连接密码；留空则不启用',
-                              ),
-                            ),
-                            if (settingsServer.passwordProtected)
-                              CheckboxListTile(
-                                contentPadding: EdgeInsets.zero,
-                                title: const Text('清除现有服务器密码'),
-                                value: clearServerPassword,
-                                onChanged: (value) => setDialogState(
-                                  () => clearServerPassword = value == true,
-                                ),
-                              ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                'audit' => OsAuditLogPage(
-                  api: client,
-                  token: auth.token,
-                  serverId: server.id,
-                ),
-                'transport' => OsSettingsPage(
-                  icon: Icons.security_rounded,
-                  title: '传输与安全',
-                  subtitle: '选择语音质量、内容保护、附件承载与屏幕共享路径。',
-                  footer: Align(
-                    alignment: Alignment.centerRight,
-                    child: OsPrimaryButton(
-                      label: '保存更改',
-                      icon: Icons.check_rounded,
-                      onPressed: () => Navigator.pop(context, 'save-transport'),
-                    ),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      OsFormCard(
-                        icon: Icons.graphic_eq_rounded,
-                        title: '语音传输',
-                        child: Column(
-                          children: [
-                            for (final option in const [
-                              (24, '超低', '最低流量，适合网络较差 · 预计 24 kbps'),
-                              (48, '低', '节省流量，适合普通语音 · 预计 48 kbps'),
-                              (64, '中', '清晰语音，推荐默认 · 预计 64 kbps'),
-                              (96, '高', '更清晰，使用更多带宽 · 预计 96 kbps'),
-                              (128, '超高', '最高质量与带宽占用 · 预计 128 kbps'),
-                            ]) ...[
-                              if (option.$1 != 24) const SizedBox(height: 7),
-                              MicrophoneActivationOption(
-                                icon: Icons.multitrack_audio_rounded,
-                                selected: voiceAudioBitrateKbps == option.$1,
-                                title: option.$2,
-                                subtitle: option.$3,
-                                onTap: () => setDialogState(
-                                  () => voiceAudioBitrateKbps = option.$1,
-                                ),
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      OsFormCard(
-                        icon: Icons.screen_share_rounded,
-                        title: '屏幕共享画质',
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            const Text(
-                              '设置各档位的发送码率上限（Mbps）。实际码率仍由 WebRTC 根据网络状况动态调整。',
-                              style: TextStyle(
-                                color: OsColors.muted,
-                                height: 1.45,
-                              ),
-                            ),
-                            const SizedBox(height: 14),
-                            Row(
-                              children: [
-                                const SizedBox(width: 68),
-                                for (final fps in screenShareBitrateFps)
-                                  Expanded(
-                                    child: Text(
-                                      '$fps FPS',
-                                      textAlign: TextAlign.center,
-                                      style: const TextStyle(
-                                        color: OsColors.dim,
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w800,
-                                      ),
-                                    ),
-                                  ),
-                              ],
-                            ),
-                            const SizedBox(height: 6),
-                            for (final row in screenShareBitrateRows) ...[
-                              Row(
-                                children: [
-                                  SizedBox(
-                                    width: 68,
-                                    child: Text(
-                                      row.$2,
-                                      style: const TextStyle(
-                                        color: OsColors.muted,
-                                        fontWeight: FontWeight.w800,
-                                      ),
-                                    ),
-                                  ),
-                                  for (final fps in screenShareBitrateFps)
-                                    Expanded(
-                                      child: Padding(
-                                        padding: const EdgeInsets.only(left: 8),
-                                        child: TextField(
-                                          key: ValueKey(
-                                            'screen-share-bitrate-${row.$1}-$fps',
-                                          ),
-                                          controller:
-                                              screenShareBitrateControllers[(
-                                                row.$1,
-                                                fps,
-                                              )],
-                                          keyboardType: TextInputType.number,
-                                          inputFormatters: [
-                                            FilteringTextInputFormatter
-                                                .digitsOnly,
-                                            LengthLimitingTextInputFormatter(3),
-                                          ],
-                                          textAlign: TextAlign.center,
-                                          decoration: const InputDecoration(
-                                            isDense: true,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                ],
-                              ),
-                              if (row.$1 != 'source') const SizedBox(height: 9),
-                            ],
-                            const SizedBox(height: 10),
-                            Align(
-                              alignment: Alignment.centerRight,
-                              child: OsSecondaryButton(
-                                label: '恢复默认值',
-                                icon: Icons.restart_alt_rounded,
-                                onPressed: () {
-                                  for (final row in screenShareBitrateRows) {
-                                    for (final fps in screenShareBitrateFps) {
-                                      screenShareBitrateControllers[(
-                                                row.$1,
-                                                fps,
-                                              )]!
-                                              .text =
-                                          '${ScreenShareBitrateLimits.defaults.bitrateMbps(row.$1, fps)}';
-                                    }
-                                  }
-                                },
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      OsFormCard(
-                        icon: Icons.shield_outlined,
-                        title: '服务器加密类型',
-                        child: Column(
-                          children: [
-                            MicrophoneActivationOption(
-                              icon: Icons.lock_open_rounded,
-                              selected: encryptionMode == 'none',
-                              title: '不加密',
-                              subtitle: '不做额外内容加密；保留 WebRTC 自带的安全传输',
-                              onTap:
-                                  settingsServer.tlsStatus == 'active' &&
-                                      !isOwner
-                                  ? null
-                                  : () => setDialogState(
-                                      () => encryptionMode = 'none',
-                                    ),
-                            ),
-                            const SizedBox(height: 7),
-                            MicrophoneActivationOption(
-                              icon: Icons.https_outlined,
-                              selected: encryptionMode == 'transport',
-                              title: '传输层加密',
-                              subtitle: '通过 HTTPS、WSS 等安全传输保护连接',
-                              onTap: isOwner
-                                  ? () => setDialogState(
-                                      () => encryptionMode = 'transport',
-                                    )
-                                  : null,
-                              expanded: encryptionMode == 'transport'
-                                  ? Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.stretch,
-                                      children: [
-                                        const Divider(height: 18),
-                                        MicrophoneActivationOption(
-                                          icon: Icons.language_rounded,
-                                          selected:
-                                              tlsCertificateType == 'domain',
-                                          title: '域名证书（推荐）',
-                                          subtitle:
-                                              '域名已解析到服务器，80/TCP 可访问；自动申请和续签',
-                                          onTap: isOwner
-                                              ? () => setDialogState(() {
-                                                  tlsCertificateType = 'domain';
-                                                  tlsDetectionError = '';
-                                                })
-                                              : null,
-                                        ),
-                                        const SizedBox(height: 7),
-                                        MicrophoneActivationOption(
-                                          icon: Icons.public_rounded,
-                                          selected: tlsCertificateType == 'ip',
-                                          title: '公网 IP 证书',
-                                          subtitle: '仅限固定公网 IP；有效期短，将自动频繁续签',
-                                          onTap: isOwner
-                                              ? () => setDialogState(() {
-                                                  tlsCertificateType = 'ip';
-                                                  tlsDetectionError = '';
-                                                  unawaited(() async {
-                                                    try {
-                                                      final detected = await client
-                                                          .detectServerPublicIp(
-                                                            auth.token,
-                                                            server.id,
-                                                          );
-                                                      if (detected.isNotEmpty &&
-                                                          context.mounted &&
-                                                          tlsCertificateType ==
-                                                              'ip') {
-                                                        setDialogState(() {
-                                                          tlsIdentifierController
-                                                                  .text =
-                                                              detected;
-                                                          tlsDetectionError =
-                                                              '';
-                                                        });
-                                                      }
-                                                    } catch (exception) {
-                                                      if (context.mounted &&
-                                                          tlsCertificateType ==
-                                                              'ip') {
-                                                        setDialogState(
-                                                          () => tlsDetectionError =
-                                                              '自动检测失败：$exception',
-                                                        );
-                                                      }
-                                                    }
-                                                  }());
-                                                })
-                                              : null,
-                                        ),
-                                        const SizedBox(height: 10),
-                                        TextField(
-                                          controller: tlsIdentifierController,
-                                          enabled: isOwner,
-                                          decoration: InputDecoration(
-                                            labelText:
-                                                tlsCertificateType == 'domain'
-                                                ? '公网域名'
-                                                : '固定公网 IP',
-                                            hintText:
-                                                tlsCertificateType == 'domain'
-                                                ? 'voice.example.com'
-                                                : '203.0.113.10',
-                                          ),
-                                        ),
-                                        if (tlsDetectionError.isNotEmpty) ...[
-                                          const SizedBox(height: 6),
-                                          Text(
-                                            tlsDetectionError,
-                                            style: const TextStyle(
-                                              color: OsColors.danger,
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                          ),
-                                        ],
-                                        const SizedBox(height: 8),
-                                        Text(
-                                          tlsStatusText,
-                                          style: TextStyle(
-                                            color: tlsStatusColor,
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.w600,
-                                            height: 1.45,
-                                          ),
-                                        ),
-                                      ],
-                                    )
-                                  : null,
-                            ),
-                            const SizedBox(height: 7),
-                            MicrophoneActivationOption(
-                              icon: Icons.enhanced_encryption_outlined,
-                              selected: encryptionMode == 'e2ee',
-                              title: '端到端加密',
-                              subtitle: tlsActive
-                                  ? '频道内容、临时私聊与语音媒体均由客户端加密'
-                                  : '保存时将先启用并验证传输层加密',
-                              onTap: isOwner
-                                  ? () => setDialogState(
-                                      () => encryptionMode = 'e2ee',
-                                    )
-                                  : null,
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      OsFormCard(
-                        icon: Icons.attach_file_rounded,
-                        title: '附件承载',
-                        child: Column(
-                          children: [
-                            MicrophoneActivationOption(
-                              icon: Icons.dns_outlined,
-                              selected: attachmentMode == 'local',
-                              title: '本服务器承载',
-                              subtitle: '聊天附件使用当前 OpenSpeak 服务器存储与带宽',
-                              onTap: () => setDialogState(
-                                () => attachmentMode = 'local',
-                              ),
-                            ),
-                            const SizedBox(height: 7),
-                            MicrophoneActivationOption(
-                              icon: Icons.cloud_outlined,
-                              selected: attachmentMode == 'external',
-                              title: '其他服务器承载',
-                              subtitle: '聊天附件交由外部附件节点传输与存储',
-                              onTap: () => setDialogState(
-                                () => attachmentMode = 'external',
-                              ),
-                              expanded: attachmentMode == 'external'
-                                  ? Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.stretch,
-                                      children: [
-                                        const Divider(height: 18),
-                                        Row(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Expanded(
-                                              child: TextField(
-                                                controller:
-                                                    fileNodeHostController,
-                                                decoration:
-                                                    const InputDecoration(
-                                                      labelText: '外部服务器 IP 或域名',
-                                                    ),
-                                              ),
-                                            ),
-                                            const SizedBox(width: 8),
-                                            SizedBox(
-                                              width: 128,
-                                              child: TextField(
-                                                controller:
-                                                    fileNodePortController,
-                                                keyboardType:
-                                                    TextInputType.number,
-                                                inputFormatters: [
-                                                  FilteringTextInputFormatter
-                                                      .digitsOnly,
-                                                ],
-                                                decoration:
-                                                    const InputDecoration(
-                                                      labelText: 'HTTPS 端口',
-                                                      hintText: '27412',
-                                                    ),
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                        const SizedBox(height: 8),
-                                        TextField(
-                                          controller: fileNodeSecretController,
-                                          obscureText: true,
-                                          decoration: InputDecoration(
-                                            labelText:
-                                                fileNodes
-                                                        .where(
-                                                          (node) =>
-                                                              node.id ==
-                                                              selectedFileNodeId,
-                                                        )
-                                                        .firstOrNull
-                                                        ?.secretSet ==
-                                                    true
-                                                ? '节点密钥（留空保持不变）'
-                                                : '节点密钥',
-                                          ),
-                                        ),
-                                        const SizedBox(height: 8),
-                                        const ActivationHint(
-                                          text: '默认使用 27412；节点密钥位于外部服务器的部署凭据中。',
-                                        ),
-                                      ],
-                                    )
-                                  : null,
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      OsFormCard(
-                        icon: Icons.screen_share_outlined,
-                        title: '屏幕共享方式',
-                        child: Column(
-                          children: [
-                            MicrophoneActivationOption(
-                              icon: Icons.dns_outlined,
-                              selected: screenRelayMode == 'local',
-                              title: '本服务器中转',
-                              subtitle: '屏幕共享使用内置 LiveKit；语音始终保持在这里',
-                              onTap: () => setDialogState(
-                                () => screenRelayMode = 'local',
-                              ),
-                            ),
-                            const SizedBox(height: 7),
-                            MicrophoneActivationOption(
-                              icon: Icons.cloud_outlined,
-                              selected: screenRelayMode == 'external',
-                              title: '外部 LiveKit 中转',
-                              subtitle: '仅屏幕共享使用外部节点，不迁移语音',
-                              onTap: () => setDialogState(
-                                () => screenRelayMode = 'external',
-                              ),
-                              expanded: screenRelayMode == 'external'
-                                  ? Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.stretch,
-                                      children: [
-                                        const Divider(height: 18),
-                                        Row(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
-                                            Expanded(
-                                              child: TextField(
-                                                controller:
-                                                    mediaNodeHostController,
-                                                decoration:
-                                                    const InputDecoration(
-                                                      labelText:
-                                                          'LiveKit 服务器 IP 或域名',
-                                                    ),
-                                              ),
-                                            ),
-                                            const SizedBox(width: 8),
-                                            SizedBox(
-                                              width: 128,
-                                              child: TextField(
-                                                controller:
-                                                    mediaNodePortController,
-                                                keyboardType:
-                                                    TextInputType.number,
-                                                inputFormatters: [
-                                                  FilteringTextInputFormatter
-                                                      .digitsOnly,
-                                                ],
-                                                decoration:
-                                                    const InputDecoration(
-                                                      labelText: 'WSS 端口',
-                                                      hintText: '27412',
-                                                    ),
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                        const SizedBox(height: 8),
-                                        TextField(
-                                          controller: mediaNodeKeyController,
-                                          decoration: const InputDecoration(
-                                            labelText: 'LiveKit API Key',
-                                          ),
-                                        ),
-                                        const SizedBox(height: 8),
-                                        TextField(
-                                          controller: mediaNodeSecretController,
-                                          obscureText: true,
-                                          decoration: InputDecoration(
-                                            labelText:
-                                                mediaNodes
-                                                        .where(
-                                                          (node) =>
-                                                              node.id ==
-                                                              selectedMediaNodeId,
-                                                        )
-                                                        .firstOrNull
-                                                        ?.apiSecretSet ==
-                                                    true
-                                                ? 'LiveKit API Secret（留空保持不变）'
-                                                : 'LiveKit API Secret',
-                                          ),
-                                        ),
-                                        const SizedBox(height: 8),
-                                        const ActivationHint(
-                                          text:
-                                              '720p、1080p、Source 均提供 15、30、60 FPS；语音仍使用本服务器。',
-                                        ),
-                                      ],
-                                    )
-                                  : null,
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                'owner' => OsSettingsPage(
-                  icon: Icons.devices_rounded,
-                  title: '设备与会话',
-                  subtitle: ownerStatus?.isOwner == true
-                      ? '管理已授权设备、会话与设备配对。'
-                      : '将此设备添加为所有者设备。',
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: ownerStatus?.isOwner == true
-                        ? [
-                            OsSettingsTile(
-                              icon: Icons.devices_rounded,
-                              title: '所有者设备与会话',
-                              subtitle: '查看、下线或撤销已授权设备',
-                              onTap: () => Navigator.pop(context, 'devices'),
-                            ),
-                            const SizedBox(height: 10),
-                            OsSettingsTile(
-                              icon: Icons.add_moderator_outlined,
-                              title: '添加所有者设备',
-                              subtitle: '生成 5 分钟有效的一次性配对码',
-                              onTap: () =>
-                                  Navigator.pop(context, 'pairing-code'),
-                            ),
-                          ]
-                        : [
-                            OsSettingsTile(
-                              icon: Icons.key_rounded,
-                              title: '输入设备配对码',
-                              subtitle: '将这台电脑添加为服务器所有者设备',
-                              onTap: () => Navigator.pop(context, 'pair'),
-                            ),
-                          ],
-                  ),
-                ),
-                _ => OsSettingsPage(
-                  icon: Icons.dashboard_outlined,
-                  title: '服务器概览',
-                  subtitle: '设置服务器头像与昵称。',
-                  footer: canEditProfile
-                      ? Align(
-                          alignment: Alignment.centerRight,
-                          child: OsPrimaryButton(
-                            label: '保存更改',
-                            icon: Icons.check_rounded,
-                            onPressed: () =>
-                                Navigator.pop(context, 'save-overview'),
-                          ),
-                        )
-                      : null,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      OsProfilePreview(
-                        displayName: serverNameController.text.trim().isEmpty
-                            ? serverName
-                            : serverNameController.text.trim(),
-                        avatarFile: pendingServerAvatar ?? cachedServerAvatar,
-                        avatarUri:
-                            pendingServerAvatar == null &&
-                                cachedServerAvatar == null &&
-                                settingsServer.avatarVersion > 0
-                            ? client.serverAvatarUri(
-                                server.id,
-                                settingsServer.avatarVersion,
-                              )
-                            : null,
-                        onChooseAvatar: canEditProfile && !kIsWeb
-                            ? () async {
-                                final selected = await openFile(
-                                  acceptedTypeGroups: const [
-                                    XTypeGroup(
-                                      label: '服务器头像',
-                                      extensions: ['jpg', 'jpeg', 'png', 'gif'],
-                                    ),
-                                  ],
-                                );
-                                if (selected != null) {
-                                  setDialogState(
-                                    () => pendingServerAvatar = File(
-                                      selected.path,
-                                    ),
-                                  );
-                                }
-                              }
-                            : null,
-                      ),
-                      const SizedBox(height: 14),
-                      const OsFieldLabel('服务器昵称'),
-                      const SizedBox(height: 7),
-                      TextField(
-                        controller: serverNameController,
-                        enabled: canEditProfile,
-                        decoration: const InputDecoration(
-                          hintText: '输入服务器昵称',
-                          prefixIcon: Icon(Icons.badge_outlined, size: 20),
-                        ),
-                        onChanged: (_) => setDialogState(() {}),
-                        onSubmitted: canEditProfile
-                            ? (_) => Navigator.pop(context, 'save-overview')
-                            : null,
-                      ),
-                    ],
-                  ),
-                ),
-              },
-            ),
-          ),
-        ),
-      );
-      switch (action) {
-        case 'save-overview':
-          await applyServerProfile(
-            serverNameController.text,
-            avatarFile: pendingServerAvatar,
+    if (result == null) return;
+    switch (result.action) {
+      case 'save-overview':
+        await applyServerProfile(
+          result.serverName,
+          avatarFile: result.avatarFile,
+        );
+      case 'save-general':
+        final retentionDays = int.tryParse(result.historyRetentionDays);
+        if (retentionDays == null || result.defaultChannelId == null) {
+          if (mounted) setState(() => error = '请填写有效的历史保留天数和默认频道');
+          return;
+        }
+        await runGuarded(() async {
+          final password = result.password;
+          final updated = await client.updateServerGeneralSettings(
+            auth.token,
+            server.id,
+            historyRetentionDays: retentionDays,
+            defaultChannelId: result.defaultChannelId!,
+            serverPassword: !result.clearServerPassword && password.isNotEmpty
+                ? password
+                : null,
+            clearServerPassword: result.clearServerPassword,
           );
-        case 'save-general':
-          final retentionDays = int.tryParse(retentionController.text);
-          if (retentionDays == null || defaultChannelId == null) {
-            if (mounted) setState(() => error = '请填写有效的历史保留天数和默认频道');
+          if (!mounted) return;
+          setState(() {
+            selectedServer = updated;
+            servers = servers
+                .map((item) => item.id == updated.id ? updated : item)
+                .toList();
+          });
+        });
+      case 'save-transport':
+        await runGuarded(() async {
+          int screenShareBitrate(String resolution, int fps) {
+            final value = int.tryParse(
+              result.screenShareBitrates[(resolution, fps)]!,
+            );
+            if (value == null || value < 1 || value > 200) {
+              throw OpenSpeakException('屏幕共享码率上限必须为 1–200 Mbps');
+            }
+            return value;
+          }
+
+          final screenShareBitrateLimits = ScreenShareBitrateLimits(
+            p720Fps15: screenShareBitrate('720p', 15),
+            p720Fps30: screenShareBitrate('720p', 30),
+            p720Fps60: screenShareBitrate('720p', 60),
+            p1080Fps15: screenShareBitrate('1080p', 15),
+            p1080Fps30: screenShareBitrate('1080p', 30),
+            p1080Fps60: screenShareBitrate('1080p', 60),
+            sourceFps15: screenShareBitrate('source', 15),
+            sourceFps30: screenShareBitrate('source', 30),
+            sourceFps60: screenShareBitrate('source', 60),
+          );
+          FileNode? selectedFileNode;
+          String? nextFileNodeUrl;
+          String? nextMediaNodeUrl;
+          if (result.attachmentMode == 'external') {
+            selectedFileNode = fileNodes
+                .where((node) => node.id == result.selectedFileNodeId)
+                .firstOrNull;
+            nextFileNodeUrl = externalFileNodeUrl(
+              host: result.fileNodeHost,
+              port: result.fileNodePort,
+              path: result.fileNodePath,
+            );
+            if ((selectedFileNode == null || !selectedFileNode.secretSet) &&
+                result.fileNodeSecret.isEmpty) {
+              throw OpenSpeakException('首次配置外部附件节点需要填写节点密钥');
+            }
+          }
+          if (result.screenRelayMode == 'external') {
+            final existing = mediaNodes
+                .where((node) => node.id == result.selectedMediaNodeId)
+                .firstOrNull;
+            nextMediaNodeUrl = externalLiveKitUrl(
+              host: result.mediaNodeHost,
+              port: result.mediaNodePort,
+              path: result.mediaNodePath,
+            );
+            if (result.mediaNodeKey.trim().isEmpty) {
+              throw OpenSpeakException('请填写 LiveKit API Key');
+            }
+            if (existing == null && result.mediaNodeSecret.isEmpty) {
+              throw OpenSpeakException('新建外部屏幕共享节点需要填写 API Secret');
+            }
+          }
+          var transportClient = client;
+          final identifier = result.tlsIdentifier.trim();
+          if (result.encryptionMode == 'none' &&
+              settingsServer.tlsStatus == 'active') {
+            if (!isOwner) {
+              throw OpenSpeakException('只有服主可以关闭传输层加密');
+            }
+            final proof = await freshOwnerProof(client, auth, server);
+            final pending = await client.beginEncryptionDowngrade(
+              auth.token,
+              server.id,
+              challengeId: proof.challengeId,
+              signature: proof.signature,
+            );
+            if (pending.confirmationToken.isEmpty || pending.plainUrl.isEmpty) {
+              throw OpenSpeakException('服务器没有返回 HTTP 降级确认信息');
+            }
+            final plainClient = OpenSpeakApi(pending.plainUrl);
+            final updated = await plainClient.confirmEncryptionDowngrade(
+              pending.confirmationToken,
+            );
+            await persistSelectedConnectionUrl(pending.plainUrl);
+            if (!mounted) return;
+            setState(() {
+              selectedServer = updated;
+              servers = servers
+                  .map((item) => item.id == updated.id ? updated : item)
+                  .toList();
+            });
+            await login();
             return;
           }
-          await runGuarded(() async {
-            final password = passwordController.text;
-            final updated = await client.updateServerGeneralSettings(
+          final needsTLSApply =
+              result.encryptionMode != 'none' &&
+              (settingsServer.tlsStatus != 'active' ||
+                  settingsServer.tlsCertificateType !=
+                      result.tlsCertificateType ||
+                  settingsServer.tlsIdentifier != identifier);
+          late OsServer updated;
+          if (needsTLSApply) {
+            if (!isOwner || identifier.isEmpty) {
+              throw OpenSpeakException('请选择证书类型并填写域名或公网 IP');
+            }
+            final proof = await freshOwnerProof(client, auth, server);
+            final pending = await client.enableServerTls(
               auth.token,
               server.id,
-              historyRetentionDays: retentionDays,
-              defaultChannelId: defaultChannelId!,
-              serverPassword: !clearServerPassword && password.isNotEmpty
-                  ? password
-                  : null,
-              clearServerPassword: clearServerPassword,
+              certificateType: result.tlsCertificateType,
+              identifier: identifier,
+              challengeId: proof.challengeId,
+              signature: proof.signature,
             );
-            if (!mounted) return;
-            setState(() {
-              selectedServer = updated;
-              servers = servers
-                  .map((item) => item.id == updated.id ? updated : item)
-                  .toList();
-            });
-          });
-        case 'save-transport':
-          await runGuarded(() async {
-            int screenShareBitrate(String resolution, int fps) {
-              final value = int.tryParse(
-                screenShareBitrateControllers[(resolution, fps)]!.text,
-              );
-              if (value == null || value < 1 || value > 200) {
-                throw OpenSpeakException('屏幕共享码率上限必须为 1–200 Mbps');
-              }
-              return value;
+            if (pending.confirmationToken.isEmpty ||
+                pending.secureUrl.isEmpty) {
+              throw OpenSpeakException('服务器没有返回 TLS 确认信息');
             }
-
-            final screenShareBitrateLimits = ScreenShareBitrateLimits(
-              p720Fps15: screenShareBitrate('720p', 15),
-              p720Fps30: screenShareBitrate('720p', 30),
-              p720Fps60: screenShareBitrate('720p', 60),
-              p1080Fps15: screenShareBitrate('1080p', 15),
-              p1080Fps30: screenShareBitrate('1080p', 30),
-              p1080Fps60: screenShareBitrate('1080p', 60),
-              sourceFps15: screenShareBitrate('source', 15),
-              sourceFps30: screenShareBitrate('source', 30),
-              sourceFps60: screenShareBitrate('source', 60),
-            );
-            FileNode? selectedFileNode;
-            String? nextFileNodeUrl;
-            String? nextMediaNodeUrl;
-            if (attachmentMode == 'external') {
-              selectedFileNode = fileNodes
-                  .where((node) => node.id == selectedFileNodeId)
-                  .firstOrNull;
-              nextFileNodeUrl = externalFileNodeUrl(
-                host: fileNodeHostController.text,
-                port: fileNodePortController.text,
-                path: fileNodePath,
-              );
-              if ((selectedFileNode == null || !selectedFileNode.secretSet) &&
-                  fileNodeSecretController.text.isEmpty) {
-                throw OpenSpeakException('首次配置外部附件节点需要填写节点密钥');
-              }
-            }
-            if (screenRelayMode == 'external') {
-              final existing = mediaNodes
-                  .where((node) => node.id == selectedMediaNodeId)
-                  .firstOrNull;
-              nextMediaNodeUrl = externalLiveKitUrl(
-                host: mediaNodeHostController.text,
-                port: mediaNodePortController.text,
-                path: mediaNodePath,
-              );
-              if (mediaNodeKeyController.text.trim().isEmpty) {
-                throw OpenSpeakException('请填写 LiveKit API Key');
-              }
-              if (existing == null && mediaNodeSecretController.text.isEmpty) {
-                throw OpenSpeakException('新建外部屏幕共享节点需要填写 API Secret');
-              }
-            }
-            var transportClient = client;
-            final identifier = tlsIdentifierController.text.trim();
-            if (encryptionMode == 'none' &&
-                settingsServer.tlsStatus == 'active') {
-              if (!isOwner) {
-                throw OpenSpeakException('只有服主可以关闭传输层加密');
-              }
-              final proof = await freshOwnerProof(client, auth, server);
-              final pending = await client.beginEncryptionDowngrade(
-                auth.token,
-                server.id,
-                challengeId: proof.challengeId,
-                signature: proof.signature,
-              );
-              if (pending.confirmationToken.isEmpty ||
-                  pending.plainUrl.isEmpty) {
-                throw OpenSpeakException('服务器没有返回 HTTP 降级确认信息');
-              }
-              final plainClient = OpenSpeakApi(pending.plainUrl);
-              final updated = await plainClient.confirmEncryptionDowngrade(
-                pending.confirmationToken,
-              );
-              await persistSelectedConnectionUrl(pending.plainUrl);
-              if (!mounted) return;
-              setState(() {
-                selectedServer = updated;
-                servers = servers
-                    .map((item) => item.id == updated.id ? updated : item)
-                    .toList();
-              });
-              await login();
-              return;
-            }
-            final needsTLSApply =
-                encryptionMode != 'none' &&
-                (settingsServer.tlsStatus != 'active' ||
-                    settingsServer.tlsCertificateType != tlsCertificateType ||
-                    settingsServer.tlsIdentifier != identifier);
-            late OsServer updated;
-            if (needsTLSApply) {
-              if (!isOwner || identifier.isEmpty) {
-                throw OpenSpeakException('请选择证书类型并填写域名或公网 IP');
-              }
-              final proof = await freshOwnerProof(client, auth, server);
-              final pending = await client.enableServerTls(
-                auth.token,
-                server.id,
-                certificateType: tlsCertificateType,
-                identifier: identifier,
-                challengeId: proof.challengeId,
-                signature: proof.signature,
-              );
-              if (pending.confirmationToken.isEmpty ||
-                  pending.secureUrl.isEmpty) {
-                throw OpenSpeakException('服务器没有返回 TLS 确认信息');
-              }
-              final secureClient = OpenSpeakApi(pending.secureUrl);
-              transportClient = secureClient;
-              updated = await secureClient.confirmServerTls(
-                auth.token,
-                server.id,
-                confirmationToken: pending.confirmationToken,
-              );
-              await persistSelectedConnectionUrl(pending.secureUrl);
-              updated = await secureClient.updateServerVoiceTransport(
-                auth.token,
-                server.id,
-                encryptionMode: encryptionMode,
-                voiceAudioBitrateKbps: voiceAudioBitrateKbps,
-                screenShareBitrateLimits: screenShareBitrateLimits,
-              );
-            } else {
-              updated = await client.updateServerVoiceTransport(
-                auth.token,
-                server.id,
-                encryptionMode: encryptionMode,
-                voiceAudioBitrateKbps: voiceAudioBitrateKbps,
-                screenShareBitrateLimits: screenShareBitrateLimits,
-              );
-            }
-            await applyScreenRelaySettings(
-              transportClient,
-              auth,
-              server,
-              nodes: mediaNodes,
-              external: screenRelayMode == 'external',
-              selectedNodeId: selectedMediaNodeId,
-              name: mediaNodeName,
-              liveKitUrl: nextMediaNodeUrl ?? '',
-              apiKey: mediaNodeKeyController.text.trim(),
-              apiSecret: mediaNodeSecretController.text,
-            );
-            var attachmentFileNodeId = selectedFileNodeId;
-            if (attachmentMode == 'external') {
-              final node = selectedFileNode == null
-                  ? await transportClient.createFileNode(
-                      auth.token,
-                      server.id,
-                      name: '外部附件节点',
-                      baseUrl: nextFileNodeUrl!,
-                      secret: fileNodeSecretController.text,
-                    )
-                  : await transportClient.updateFileNode(
-                      auth.token,
-                      server.id,
-                      selectedFileNode.id,
-                      baseUrl: nextFileNodeUrl!,
-                      secret: fileNodeSecretController.text.isEmpty
-                          ? null
-                          : fileNodeSecretController.text,
-                      enabled: true,
-                    );
-              attachmentFileNodeId = node.id;
-            }
-            updated = await transportClient.setExternalAttachments(
+            final secureClient = OpenSpeakApi(pending.secureUrl);
+            transportClient = secureClient;
+            updated = await secureClient.confirmServerTls(
               auth.token,
               server.id,
-              enabled: attachmentMode == 'external',
-              fileNodeId: attachmentFileNodeId,
+              confirmationToken: pending.confirmationToken,
             );
-            if (!mounted) return;
-            setState(() {
-              selectedServer = updated;
-              servers = servers
-                  .map((item) => item.id == updated.id ? updated : item)
-                  .toList();
-            });
-            if (needsTLSApply) await login();
-          });
-        case 'devices':
-          if (await showOwnerDevices()) {
-            await showServerSettings(initialPage: 'owner');
+            await persistSelectedConnectionUrl(pending.secureUrl);
+            updated = await secureClient.updateServerVoiceTransport(
+              auth.token,
+              server.id,
+              encryptionMode: result.encryptionMode,
+              voiceAudioBitrateKbps: result.voiceAudioBitrateKbps,
+              screenShareBitrateLimits: screenShareBitrateLimits,
+            );
+          } else {
+            updated = await client.updateServerVoiceTransport(
+              auth.token,
+              server.id,
+              encryptionMode: result.encryptionMode,
+              voiceAudioBitrateKbps: result.voiceAudioBitrateKbps,
+              screenShareBitrateLimits: screenShareBitrateLimits,
+            );
           }
-        case 'pairing-code':
-          if (await showOwnerPairingCode()) {
-            await showServerSettings(initialPage: 'owner');
+          await applyScreenRelaySettings(
+            transportClient,
+            auth,
+            server,
+            nodes: mediaNodes,
+            external: result.screenRelayMode == 'external',
+            selectedNodeId: result.selectedMediaNodeId,
+            name: result.mediaNodeName,
+            liveKitUrl: nextMediaNodeUrl ?? '',
+            apiKey: result.mediaNodeKey.trim(),
+            apiSecret: result.mediaNodeSecret,
+          );
+          var attachmentFileNodeId = result.selectedFileNodeId;
+          if (result.attachmentMode == 'external') {
+            final node = selectedFileNode == null
+                ? await transportClient.createFileNode(
+                    auth.token,
+                    server.id,
+                    name: '外部附件节点',
+                    baseUrl: nextFileNodeUrl!,
+                    secret: result.fileNodeSecret,
+                  )
+                : await transportClient.updateFileNode(
+                    auth.token,
+                    server.id,
+                    selectedFileNode.id,
+                    baseUrl: nextFileNodeUrl!,
+                    secret: result.fileNodeSecret.isEmpty
+                        ? null
+                        : result.fileNodeSecret,
+                    enabled: true,
+                  );
+            attachmentFileNodeId = node.id;
           }
-        case 'pair':
-          await showOwnerPairDialog();
-        case 'save-permissions':
-          await runGuarded(() async {
-            await client.updateServerPermissions(
-              auth.token,
-              server.id,
-              admin: adminPermissions,
-              user: userPermissions,
-              messageRetractWindowMinutes: retractWindowMinutes,
-            );
-            await refreshServerState();
+          updated = await transportClient.setExternalAttachments(
+            auth.token,
+            server.id,
+            enabled: result.attachmentMode == 'external',
+            fileNodeId: attachmentFileNodeId,
+          );
+          if (!mounted) return;
+          setState(() {
+            selectedServer = updated;
+            servers = servers
+                .map((item) => item.id == updated.id ? updated : item)
+                .toList();
           });
-        case 'save-web':
-          await runGuarded(() async {
-            await client.updateWebSettings(
-              auth.token,
-              server.id,
-              enabled: webEnabled,
-              customPathEnabled: webCustomPathEnabled,
-              path: webPathController.text.trim(),
-            );
-            if (mounted) {
-              setState(() => error = null);
-            }
-          });
-        case null:
-          return;
-      }
-    } finally {
-      serverNameController.dispose();
-      retentionController.dispose();
-      passwordController.dispose();
-      tlsIdentifierController.dispose();
-      mediaNodeHostController.dispose();
-      mediaNodePortController.dispose();
-      mediaNodeKeyController.dispose();
-      mediaNodeSecretController.dispose();
-      fileNodeHostController.dispose();
-      fileNodePortController.dispose();
-      fileNodeSecretController.dispose();
-      for (final controller in screenShareBitrateControllers.values) {
-        controller.dispose();
-      }
-      webPathController.dispose();
+          if (needsTLSApply) await login();
+        });
+      case 'devices':
+        if (await showOwnerDevices()) {
+          await showServerSettings(initialPage: 'owner');
+        }
+      case 'pairing-code':
+        if (await showOwnerPairingCode()) {
+          await showServerSettings(initialPage: 'owner');
+        }
+      case 'pair':
+        await showOwnerPairDialog();
+      case 'save-permissions':
+        await runGuarded(() async {
+          await client.updateServerPermissions(
+            auth.token,
+            server.id,
+            admin: result.adminPermissions,
+            user: result.userPermissions,
+            messageRetractWindowMinutes: result.messageRetractWindowMinutes,
+          );
+          await refreshServerState();
+        });
+      case 'save-web':
+        await runGuarded(() async {
+          await client.updateWebSettings(
+            auth.token,
+            server.id,
+            enabled: result.webEnabled,
+            customPathEnabled: result.webCustomPathEnabled,
+            path: result.webPath.trim(),
+          );
+          if (mounted) {
+            setState(() => error = null);
+          }
+        });
     }
   }
 

@@ -3413,6 +3413,69 @@ void main() {
     expect(opened, isTrue);
   });
 
+  testWidgets('server settings dialog returns an overview snapshot', (
+    WidgetTester tester,
+  ) async {
+    ServerSettingsDialogResult? result;
+    final server = OsServer(
+      id: 'server',
+      name: '原服务器',
+      encryptionMode: 'e2ee',
+      defaultChannelId: 'channel',
+      attachmentExternalEnabled: false,
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => TextButton(
+            onPressed: () async {
+              result = await showDialog<ServerSettingsDialogResult>(
+                context: context,
+                builder: (_) => OsServerSettingsDialog(
+                  api: OpenSpeakApi('http://127.0.0.1:27410'),
+                  authToken: 'token',
+                  serverId: server.id,
+                  serverName: server.name,
+                  server: server,
+                  channels: [Channel(id: 'channel', name: '频道', sortOrder: 0)],
+                  mediaNodes: const [],
+                  fileNodes: const [],
+                  permissionSettings: null,
+                  currentMessageRetractWindowMinutes: 30,
+                  webSettings: null,
+                  ownerStatus: null,
+                  isOwner: true,
+                  canEditProfile: true,
+                  allowedPages: const ['overview'],
+                  initialPage: 'overview',
+                  cachedServerAvatar: null,
+                ),
+              );
+            },
+            child: const Text('打开'),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('打开'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '新服务器');
+    await tester.tap(find.text('保存更改'));
+    await tester.pumpAndSettle();
+
+    expect(result?.action, 'save-overview');
+    expect(result?.serverName, '新服务器');
+    expect(result?.avatarFile, isNull);
+    expect(result?.historyRetentionDays, '30');
+    expect(result?.defaultChannelId, 'channel');
+    expect(result?.encryptionMode, 'e2ee');
+    expect(result?.attachmentMode, 'local');
+    expect(result?.voiceAudioBitrateKbps, 64);
+    expect(result?.screenShareBitrates[('720p', 30)], '4');
+    expect(result?.webPath, 'chat');
+  });
+
   testWidgets(
     'server permission page separates delegable and owner-only abilities',
     (WidgetTester tester) async {
