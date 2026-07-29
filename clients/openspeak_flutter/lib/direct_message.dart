@@ -1,4 +1,122 @@
+import 'package:cryptography/cryptography.dart';
+
+import 'device_identity_service.dart';
 import 'openspeak_api.dart';
+
+String directEncryptionScope(
+  String serverId,
+  String firstUserId,
+  String secondUserId,
+) {
+  final users = [firstUserId, secondUserId]..sort();
+  return 'direct:$serverId:${users[0]}:${users[1]}';
+}
+
+typedef PreparedDirectEncryption = ({
+  String serverId,
+  String messageId,
+  String senderDeviceId,
+  SecretKeyData key,
+  List<Map<String, String>> envelopes,
+});
+
+class DirectMessageKeyController {
+  DirectMessageKeyController(this.deviceIdentity);
+
+  final DeviceIdentityService deviceIdentity;
+  final _keys = <String, SecretKeyData>{};
+
+  SecretKeyData? keyFor(String messageId) => _keys[messageId];
+
+  void remove(String messageId) => _keys.remove(messageId);
+
+  void clear() => _keys.clear();
+
+  Future<PreparedDirectEncryption> prepare({
+    required OpenSpeakApi api,
+    required String token,
+    required String serverId,
+    required String currentUserId,
+    required String peerUserId,
+    required E2EEDeviceIdentity identity,
+  }) async {
+    final devices = await api.getDirectE2EEDevices(
+      token,
+      serverId: serverId,
+      toUserId: peerUserId,
+    );
+    if (!devices.any((item) => item.id == identity.deviceId) ||
+        !devices.any((item) => item.userId == peerUserId)) {
+      throw OpenSpeakException('私聊设备已变化，请重试');
+    }
+    final messageId = deviceIdentity.newDirectMessageId();
+    final key = await deviceIdentity.newChannelKey();
+    final scope = directEncryptionScope(serverId, currentUserId, peerUserId);
+    final envelopes = await Future.wait(
+      devices.map((recipient) async {
+        final ciphertext = await deviceIdentity.wrapChannelKey(
+          sender: identity,
+          channelId: scope,
+          epochId: messageId,
+          recipientDeviceId: recipient.id,
+          recipientEnvelopePublicKey: recipient.envelopePublicKey,
+          channelKey: key,
+        );
+        return <String, String>{
+          'algorithm': 'openspeak-envelope-v1',
+          'recipient_user_id': recipient.userId,
+          'recipient_device_id': recipient.id,
+          'ciphertext': ciphertext,
+        };
+      }),
+    );
+    return (
+      serverId: serverId,
+      messageId: messageId,
+      senderDeviceId: identity.deviceId,
+      key: key,
+      envelopes: envelopes,
+    );
+  }
+
+  Future<SecretKeyData> unwrapAndCache({
+    required E2EEDeviceIdentity? identity,
+    required RealtimeEvent event,
+  }) async {
+    final messageId = event.payload['id'] as String? ?? '';
+    final senderDeviceId = event.payload['sender_device_id'] as String? ?? '';
+    final senderIdentityPublicKey =
+        event.payload['sender_identity_public_key'] as String? ?? '';
+    final rawEnvelopes = event.payload['envelopes'];
+    if (identity == null || rawEnvelopes is! List) {
+      throw const FormatException('missing direct key envelope');
+    }
+    Map<String, dynamic>? envelope;
+    for (final raw in rawEnvelopes) {
+      if (raw is Map && raw['recipient_device_id'] == identity.deviceId) {
+        envelope = raw.cast<String, dynamic>();
+        break;
+      }
+    }
+    if (envelope == null || envelope['algorithm'] != 'openspeak-envelope-v1') {
+      throw const FormatException('direct key envelope not found');
+    }
+    final key = await deviceIdentity.unwrapChannelKey(
+      recipient: identity,
+      channelId: directEncryptionScope(
+        event.serverId,
+        event.fromUser,
+        event.toUser,
+      ),
+      epochId: messageId,
+      senderDeviceId: senderDeviceId,
+      senderIdentityPublicKey: senderIdentityPublicKey,
+      ciphertext: envelope['ciphertext'] as String? ?? '',
+    );
+    _keys[messageId] = key;
+    return key;
+  }
+}
 
 class DirectMessage {
   DirectMessage({

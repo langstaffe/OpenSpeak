@@ -56,6 +56,7 @@ import 'voice_controls.dart';
 import 'voice_session_controller.dart';
 
 export 'channel_key_controller.dart' show mediaEncryptionScope;
+export 'direct_message.dart' show directEncryptionScope;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -242,15 +243,6 @@ List<MemberContextAction> memberContextActions({
   ];
 }
 
-String directEncryptionScope(
-  String serverId,
-  String firstUserId,
-  String secondUserId,
-) {
-  final users = [firstUserId, secondUserId]..sort();
-  return 'direct:$serverId:${users[0]}:${users[1]}';
-}
-
 class OpenSpeakApp extends StatelessWidget {
   const OpenSpeakApp({super.key});
 
@@ -397,7 +389,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   final activity = <RealtimeEvent>[];
   final channelMessageStore = ChannelMessageStore();
   late final ChannelKeyController channelKeyController;
-  final directMessageKeys = <String, SecretKeyData>{};
+  late final DirectMessageKeyController directMessageKeys;
   E2EEDeviceIdentity? e2eeDeviceIdentity;
   String? mediaKeyReadyTransition;
   final directMessageStore = DirectMessageStore();
@@ -439,6 +431,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   void initState() {
     super.initState();
     channelKeyController = ChannelKeyController(deviceIdentity);
+    directMessageKeys = DirectMessageKeyController(deviceIdentity);
     realtimeConnection = RealtimeConnectionController()
       ..addListener(onRealtimeConnectionChanged);
     audioPlayback = AudioPlaybackController(
@@ -2841,16 +2834,9 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     });
   }
 
-  Future<
-    ({
-      String serverId,
-      String messageId,
-      String senderDeviceId,
-      SecretKeyData key,
-      List<Map<String, String>> envelopes,
-    })
-  >
-  prepareDirectEncryption(String peerUserId) async {
+  Future<PreparedDirectEncryption> prepareDirectEncryption(
+    String peerUserId,
+  ) async {
     final client = api;
     final auth = session;
     final server = selectedServer;
@@ -2858,42 +2844,13 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     if (client == null || auth == null || server == null || identity == null) {
       throw OpenSpeakException('私聊加密设备尚未就绪');
     }
-    final devices = await client.getDirectE2EEDevices(
-      auth.token,
+    return directMessageKeys.prepare(
+      api: client,
+      token: auth.token,
       serverId: server.id,
-      toUserId: peerUserId,
-    );
-    if (!devices.any((item) => item.id == identity.deviceId) ||
-        !devices.any((item) => item.userId == peerUserId)) {
-      throw OpenSpeakException('私聊设备已变化，请重试');
-    }
-    final messageId = deviceIdentity.newDirectMessageId();
-    final key = await deviceIdentity.newChannelKey();
-    final scope = directEncryptionScope(server.id, auth.user.id, peerUserId);
-    final envelopes = await Future.wait(
-      devices.map((recipient) async {
-        final ciphertext = await deviceIdentity.wrapChannelKey(
-          sender: identity,
-          channelId: scope,
-          epochId: messageId,
-          recipientDeviceId: recipient.id,
-          recipientEnvelopePublicKey: recipient.envelopePublicKey,
-          channelKey: key,
-        );
-        return <String, String>{
-          'algorithm': 'openspeak-envelope-v1',
-          'recipient_user_id': recipient.userId,
-          'recipient_device_id': recipient.id,
-          'ciphertext': ciphertext,
-        };
-      }),
-    );
-    return (
-      serverId: server.id,
-      messageId: messageId,
-      senderDeviceId: identity.deviceId,
-      key: key,
-      envelopes: envelopes,
+      currentUserId: auth.user.id,
+      peerUserId: peerUserId,
+      identity: identity,
     );
   }
 
@@ -2910,8 +2867,10 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     var message = DirectMessage.fromEvent(event);
     if (message.encryptionMode == 'e2ee') {
       try {
-        final key = await unwrapDirectMessageKey(event);
-        directMessageKeys[message.id] = key;
+        final key = await directMessageKeys.unwrapAndCache(
+          identity: e2eeDeviceIdentity,
+          event: event,
+        );
         if (message.kind == 'text') {
           final cleartext = await deviceIdentity.decryptChannelText(
             channelKey: key,
@@ -2984,40 +2943,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         (_) => scrollMessagesToEnd(),
       );
     }
-  }
-
-  Future<SecretKeyData> unwrapDirectMessageKey(RealtimeEvent event) async {
-    final identity = e2eeDeviceIdentity;
-    final messageId = event.payload['id'] as String? ?? '';
-    final senderDeviceId = event.payload['sender_device_id'] as String? ?? '';
-    final senderIdentityPublicKey =
-        event.payload['sender_identity_public_key'] as String? ?? '';
-    final rawEnvelopes = event.payload['envelopes'];
-    if (identity == null || rawEnvelopes is! List) {
-      throw const FormatException('missing direct key envelope');
-    }
-    Map<String, dynamic>? envelope;
-    for (final raw in rawEnvelopes) {
-      if (raw is Map && raw['recipient_device_id'] == identity.deviceId) {
-        envelope = raw.cast<String, dynamic>();
-        break;
-      }
-    }
-    if (envelope == null || envelope['algorithm'] != 'openspeak-envelope-v1') {
-      throw const FormatException('direct key envelope not found');
-    }
-    return deviceIdentity.unwrapChannelKey(
-      recipient: identity,
-      channelId: directEncryptionScope(
-        event.serverId,
-        event.fromUser,
-        event.toUser,
-      ),
-      epochId: messageId,
-      senderDeviceId: senderDeviceId,
-      senderIdentityPublicKey: senderIdentityPublicKey,
-      ciphertext: envelope['ciphertext'] as String? ?? '',
-    );
   }
 
   void handleDirectFileExpired(RealtimeEvent event) {
@@ -3619,7 +3544,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                 .where((item) => item.id == attachment.channelId)
                 .firstOrNull;
       final key = attachment.direct
-          ? directMessageKeys[attachment.epochId]
+          ? directMessageKeys.keyFor(attachment.epochId)
           : channel == null
           ? null
           : await ensureChannelKey(channel, epochId: attachment.epochId);
@@ -3754,7 +3679,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         ? null
         : channels.where((item) => item.id == attachment.channelId).firstOrNull;
     final key = attachment.direct
-        ? directMessageKeys[attachment.epochId]
+        ? directMessageKeys.keyFor(attachment.epochId)
         : channel == null
         ? null
         : await ensureChannelKey(channel, epochId: attachment.epochId);
@@ -4116,7 +4041,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       throw OpenSpeakException('不支持此加密附件格式');
     }
     final key = attachment.direct
-        ? directMessageKeys[attachment.epochId]
+        ? directMessageKeys.keyFor(attachment.epochId)
         : await ensureChannelKey(channel!, epochId: attachment.epochId);
     if (key == null) throw OpenSpeakException('缺少附件解密密钥');
     return deviceIdentity.decryptAttachmentRange(
