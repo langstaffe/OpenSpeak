@@ -342,7 +342,6 @@ class OpenSpeakHome extends StatefulWidget {
 class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   final serverUrlController = TextEditingController(text: initialServerUrl());
   final passwordController = TextEditingController();
-  final activityScrollController = ScrollController();
   final channelScrollController = ScrollController();
   final mobileChannelScrollController = ScrollController();
   final mobileNavigatorKey = GlobalKey<NavigatorState>();
@@ -376,7 +375,8 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   ChatScope chatScope = ChatScope.channel;
   String? selectedDirectUserId;
   VoiceState? myVoiceState;
-  bool loading = false;
+  int guardedActionCount = 0;
+  bool get loading => guardedActionCount > 0;
   String? error;
   bool attachmentDragActive = false;
   bool channelReorderSaving = false;
@@ -392,7 +392,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   String currentServerRole = 'user';
   Set<String> currentServerPermissions = <String>{};
   int messageRetractWindowMinutes = 30;
-  final activity = <RealtimeEvent>[];
   final channelMessageStore = ChannelMessageStore();
   late final ChannelKeyController channelKeyController;
   late final DirectMessageKeyController directMessageKeys;
@@ -506,7 +505,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     unawaited(soundEffects.dispose());
     serverUrlController.dispose();
     passwordController.dispose();
-    activityScrollController.dispose();
     channelScrollController.dispose();
     mobileChannelScrollController.dispose();
     messageScrollController.removeListener(onMessageScroll);
@@ -955,7 +953,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         selectedChannel = null;
         mobileTabIndex = 0;
         mobileChatOpen = false;
-        activity.clear();
       });
       await showWebRtcWarningIfNeeded();
       if (!isActiveConnectionGeneration(generation)) return;
@@ -1022,7 +1019,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       presence = PresenceSnapshot.empty();
       currentServerRole = 'user';
       currentServerPermissions = <String>{};
-      activity.clear();
       error = null;
     });
     unawaited(audioPlayback.stop());
@@ -1990,10 +1986,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       }
       return false;
     }
-    setState(() {
-      activity.insert(0, event);
-      if (activity.length > 80) activity.removeLast();
-    });
     if (event.type.startsWith('voice.')) {
       applyRealtimeVoiceEvent(event);
     } else if (event.type.startsWith('user.') ||
@@ -6104,17 +6096,20 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   }
 
   Future<void> runGuarded(Future<void> Function() action) async {
+    if (!mounted) return;
     setState(() {
-      loading = true;
+      guardedActionCount += 1;
       error = null;
     });
     try {
       await action();
     } catch (e) {
-      setState(() => error = e.toString());
+      if (mounted) setState(() => error = e.toString());
     } finally {
       if (mounted) {
-        setState(() => loading = false);
+        setState(() => guardedActionCount -= 1);
+      } else {
+        guardedActionCount -= 1;
       }
     }
   }

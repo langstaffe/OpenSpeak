@@ -3004,6 +3004,37 @@ void main() {
     expect(find.text('user'), findsOneWidget);
   });
 
+  testWidgets('guarded actions stay loading until every action finishes', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(home: Scaffold(body: OpenSpeakHome())),
+    );
+    final dynamic state = tester.state(find.byType(OpenSpeakHome));
+    final first = Completer<void>();
+    final second = Completer<void>();
+
+    final firstRun = state.runGuarded(() => first.future) as Future<void>;
+    final secondRun = state.runGuarded(() => second.future) as Future<void>;
+    expect(state.loading, isTrue);
+
+    first.complete();
+    await firstRun;
+    expect(state.loading, isTrue);
+
+    second.complete();
+    await secondRun;
+    expect(state.loading, isFalse);
+
+    final afterDispose = Completer<void>();
+    final disposedRun =
+        state.runGuarded(() => afterDispose.future) as Future<void>;
+    await tester.pumpWidget(const SizedBox.shrink());
+    afterDispose.completeError(StateError('late failure'));
+    await disposedRun;
+    expect(state.loading, isFalse);
+  });
+
   testWidgets('chat composer keeps focus after sending', (tester) async {
     final controller = TextEditingController();
     addTearDown(controller.dispose);
