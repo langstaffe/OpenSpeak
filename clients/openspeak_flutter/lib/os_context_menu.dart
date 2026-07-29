@@ -5,6 +5,8 @@ import 'dart:ui' as ui;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
+import 'os_theme.dart';
+
 List<ContextMenuButtonItem> osLocalizedContextMenuItems(
   List<ContextMenuButtonItem> items,
 ) {
@@ -290,6 +292,67 @@ class _OsMacTextSelectionSurface extends StatelessWidget {
           child: Padding(padding: const EdgeInsets.all(6), child: child),
         ),
       ),
+    );
+  }
+}
+
+class OsPopupMenuRow extends StatelessWidget {
+  const OsPopupMenuRow({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    this.danger = false,
+  });
+
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final bool danger;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = danger ? const Color(0xFFFF6B6E) : OsColors.text;
+    return Row(
+      children: [
+        Container(
+          width: 34,
+          height: 34,
+          decoration: BoxDecoration(
+            color: danger ? const Color(0x333C252A) : OsColors.blurpleSoft,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Icon(
+            icon,
+            size: 18,
+            color: danger ? OsColors.danger : OsColors.blurple,
+          ),
+        ),
+        const SizedBox(width: 11),
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              title,
+              style: TextStyle(
+                color: color,
+                fontSize: 13,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 1),
+            Text(
+              subtitle,
+              style: const TextStyle(
+                color: OsColors.dim,
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }

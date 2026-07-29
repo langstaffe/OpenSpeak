@@ -1026,3 +1026,43 @@ String shortTime(DateTime? value) {
   String two(int n) => n.toString().padLeft(2, '0');
   return '${two(local.hour)}:${two(local.minute)}';
 }
+
+class DropUploadOverlay extends StatelessWidget {
+  const DropUploadOverlay({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: const Color(0xAA202225),
+        border: Border.all(color: OsColors.green, width: 2),
+      ),
+      child: const Center(
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: Color(0xFF232327),
+            borderRadius: BorderRadius.all(Radius.circular(8)),
+          ),
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: 22, vertical: 16),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.upload_file, color: OsColors.green, size: 26),
+                SizedBox(width: 10),
+                Text(
+                  '松开以上传文件',
+                  style: TextStyle(
+                    color: OsColors.text,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}

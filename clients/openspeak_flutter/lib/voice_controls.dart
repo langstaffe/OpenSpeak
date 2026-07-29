@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -1491,5 +1492,148 @@ class _VerticalVolumeSliderPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _VerticalVolumeSliderPainter oldDelegate) {
     return oldDelegate.value != value;
+  }
+}
+
+class MemberVolumePopupEntry extends PopupMenuEntry<int> {
+  const MemberVolumePopupEntry({
+    super.key,
+    required this.displayName,
+    required this.initialVolume,
+    required this.onChanged,
+    required this.onChangeEnd,
+  });
+
+  final String displayName;
+  final double initialVolume;
+  final ValueChanged<double> onChanged;
+  final ValueChanged<double> onChangeEnd;
+
+  @override
+  double get height => 80;
+
+  @override
+  bool represents(int? value) => false;
+
+  @override
+  State<MemberVolumePopupEntry> createState() => _MemberVolumePopupEntryState();
+}
+
+class _MemberVolumePopupEntryState extends State<MemberVolumePopupEntry> {
+  late double volume = widget.initialVolume.clamp(0.0, 2.0).toDouble();
+
+  @override
+  Widget build(BuildContext context) {
+    final percent = (volume * 100).round();
+    return Material(
+      type: MaterialType.transparency,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 34,
+                  height: 34,
+                  decoration: BoxDecoration(
+                    color: OsColors.blurpleSoft,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(
+                    Icons.volume_up_outlined,
+                    color: OsColors.blurple,
+                    size: 20,
+                  ),
+                ),
+                const SizedBox(width: 11),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        '调整音量',
+                        style: TextStyle(
+                          color: OsColors.text,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: 1),
+                      Text(
+                        widget.displayName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: OsColors.dim,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Text(
+                  '$percent%',
+                  key: const ValueKey('member-volume-percent'),
+                  style: const TextStyle(
+                    color: OsColors.text,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    fontFeatures: [ui.FontFeature.tabularFigures()],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              height: 24,
+              child: Row(
+                children: [
+                  const Text(
+                    '0%',
+                    style: TextStyle(color: OsColors.dim, fontSize: 11),
+                  ),
+                  Expanded(
+                    child: SliderTheme(
+                      data: SliderTheme.of(context).copyWith(
+                        activeTrackColor: OsColors.blurple,
+                        inactiveTrackColor: const Color(0xFF3A3D44),
+                        trackHeight: 4,
+                        thumbColor: OsColors.text,
+                        thumbShape: const RoundSliderThumbShape(
+                          enabledThumbRadius: 6,
+                        ),
+                        overlayColor: const Color(0x335865F2),
+                        overlayShape: const RoundSliderOverlayShape(
+                          overlayRadius: 14,
+                        ),
+                      ),
+                      child: Slider(
+                        key: const ValueKey('member-volume-slider'),
+                        min: 0,
+                        max: 2,
+                        divisions: 200,
+                        value: volume,
+                        onChanged: (value) {
+                          setState(() => volume = value);
+                          widget.onChanged(value);
+                        },
+                        onChangeEnd: widget.onChangeEnd,
+                      ),
+                    ),
+                  ),
+                  const Text(
+                    '200%',
+                    style: TextStyle(color: OsColors.dim, fontSize: 11),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }

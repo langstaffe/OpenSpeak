@@ -13,6 +13,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart' as rtc;
 import 'package:http/http.dart' as http;
 import 'package:livekit_client/livekit_client.dart' as lk;
+import 'package:openspeak_flutter/add_server_dialog.dart';
 import 'package:openspeak_flutter/attachment_transfer_controller.dart';
 import 'package:openspeak_flutter/audio_attachment_metadata.dart';
 import 'package:openspeak_flutter/audio_device_monitor.dart';

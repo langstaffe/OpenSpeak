@@ -843,3 +843,130 @@ String localDateLabel(DateTime value) {
   String two(int n) => n.toString().padLeft(2, '0');
   return '${local.year}年${two(local.month)}月${two(local.day)}日';
 }
+
+class ChatEmptyState extends StatelessWidget {
+  const ChatEmptyState({
+    super.key,
+    required this.title,
+    required this.subtitle,
+  });
+
+  final String title;
+  final String subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.chat_bubble_outline, color: OsColors.icon, size: 38),
+          const SizedBox(height: 12),
+          Text(
+            title,
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+          ),
+          const SizedBox(height: 4),
+          Text(subtitle, style: const TextStyle(color: OsColors.muted)),
+        ],
+      ),
+    );
+  }
+}
+
+class ErrorBox extends StatelessWidget {
+  const ErrorBox({
+    super.key,
+    required this.message,
+    this.actionLabel,
+    this.onAction,
+  });
+  final String message;
+  final String? actionLabel;
+  final VoidCallback? onAction;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(top: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF5C2B2B),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: SelectableText(
+              message,
+              style: const TextStyle(color: Color(0xFFFFD7D7)),
+            ),
+          ),
+          if (actionLabel != null && onAction != null) ...[
+            const SizedBox(width: 12),
+            OutlinedButton.icon(
+              key: const ValueKey('error-box-action'),
+              onPressed: onAction,
+              style: OutlinedButton.styleFrom(
+                foregroundColor: const Color(0xFFFFE6E6),
+                side: const BorderSide(color: Color(0x99FFD7D7)),
+                backgroundColor: const Color(0x33231919),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+              ),
+              icon: const Icon(Icons.settings_outlined, size: 17),
+              label: Text(
+                actionLabel!,
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class NewMessagesPill extends StatelessWidget {
+  const NewMessagesPill({super.key, required this.count, required this.onTap});
+
+  final int count;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: const Color(0xFF2C2F39),
+      borderRadius: BorderRadius.circular(999),
+      child: InkWell(
+        onTap: onTap,
+        mouseCursor: SystemMouseCursors.click,
+        borderRadius: BorderRadius.circular(999),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 9),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: OsColors.blurple),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x55000000),
+                blurRadius: 8,
+                offset: Offset(0, 3),
+              ),
+            ],
+          ),
+          child: Text(
+            '有 $count 条新消息 ↓',
+            style: const TextStyle(
+              color: Color(0xFFC9D2FF),
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
