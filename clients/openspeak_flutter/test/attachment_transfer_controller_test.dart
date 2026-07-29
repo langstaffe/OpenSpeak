@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:openspeak_flutter/attachment_transfer_controller.dart';
 
@@ -36,4 +37,26 @@ void main() {
       expect(controller.localSources, isNot(contains('invalid')));
     },
   );
+
+  test('completed temporary uploads remove their source file', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'openspeak_temporary_upload_',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final file = await File(
+      '${directory.path}/clipboard.png',
+    ).writeAsBytes([1, 2, 3]);
+    final task = TransferTask.upload(
+      file: XFile(file.path),
+      direct: false,
+      targetId: 'channel',
+      image: true,
+      temporary: true,
+    );
+    final controller = AttachmentTransferController()..uploads.add(task);
+
+    await controller.processUploads(upload: (_) async {}, onChanged: () {});
+
+    expect(await file.exists(), isFalse);
+  });
 }

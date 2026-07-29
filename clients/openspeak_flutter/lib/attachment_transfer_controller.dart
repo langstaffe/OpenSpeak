@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:file_selector/file_selector.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 import 'openspeak_api.dart';
 
@@ -59,6 +60,7 @@ class TransferTask {
     required this.image,
     required this.cancelToken,
     required this.status,
+    required this.temporary,
     this.attachment,
   });
 
@@ -67,6 +69,7 @@ class TransferTask {
     required bool direct,
     required String targetId,
     required bool image,
+    bool temporary = false,
   }) {
     final name = file.name.isEmpty ? 'upload' : file.name;
     return TransferTask._(
@@ -77,6 +80,7 @@ class TransferTask {
       image: image,
       cancelToken: TransferCancelToken(),
       status: TransferStatus.queued,
+      temporary: temporary,
     );
   }
 
@@ -89,6 +93,7 @@ class TransferTask {
       image: attachment.isImage,
       cancelToken: TransferCancelToken(),
       status: TransferStatus.running,
+      temporary: false,
       attachment: attachment,
     );
   }
@@ -98,6 +103,7 @@ class TransferTask {
   final bool direct;
   final String targetId;
   final bool image;
+  final bool temporary;
   TransferCancelToken cancelToken;
   final ChatAttachment? attachment;
   TransferStatus status;
@@ -108,6 +114,14 @@ class TransferTask {
   double? get progress {
     if (totalBytes <= 0) return null;
     return (transferredBytes / totalBytes).clamp(0, 1);
+  }
+
+  Future<void> deleteTemporaryFile() async {
+    if (!temporary || kIsWeb || file.path.isEmpty) return;
+    try {
+      final localFile = File(file.path);
+      if (await localFile.exists()) await localFile.delete();
+    } catch (_) {}
   }
 }
 
@@ -142,10 +156,12 @@ class AttachmentTransferController {
         try {
           await upload(task);
           uploads.remove(task);
+          await task.deleteTemporaryFile();
           onCompleted?.call(task);
         } catch (error) {
           if (task.cancelToken.isCancelled) {
             uploads.remove(task);
+            await task.deleteTemporaryFile();
           } else {
             task.status = TransferStatus.failed;
             task.error = '$error';
@@ -166,7 +182,10 @@ class AttachmentTransferController {
 
   void cancelUpload(TransferTask task) {
     task.cancelToken.cancel();
-    if (task.status != TransferStatus.running) uploads.remove(task);
+    if (task.status != TransferStatus.running) {
+      uploads.remove(task);
+      unawaited(task.deleteTemporaryFile());
+    }
   }
 
   void retryUpload(TransferTask task) {
@@ -207,6 +226,7 @@ class AttachmentTransferController {
   void cancelAndClear() {
     for (final task in uploads) {
       task.cancelToken.cancel();
+      unawaited(task.deleteTemporaryFile());
     }
     for (final task in downloads.values) {
       task.cancelToken.cancel();

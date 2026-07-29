@@ -4,11 +4,11 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' show PointerDeviceKind;
 
-import 'package:flutter/gestures.dart' show kSecondaryMouseButton;
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/gestures.dart' show kSecondaryMouseButton;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter/services.dart' show LogicalKeyboardKey, rootBundle;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart' as rtc;
 import 'package:http/http.dart' as http;
@@ -24,6 +24,7 @@ import 'package:openspeak_flutter/chat_message_widgets.dart';
 import 'package:openspeak_flutter/client_audio_settings.dart';
 import 'package:openspeak_flutter/client_link_preview.dart';
 import 'package:openspeak_flutter/client_log.dart';
+import 'package:openspeak_flutter/clipboard_image.dart';
 import 'package:openspeak_flutter/main.dart';
 import 'package:openspeak_flutter/microphone_activation.dart';
 import 'package:openspeak_flutter/openspeak_api.dart';
@@ -3050,6 +3051,50 @@ void main() {
     expect(sent, ['first', 'second']);
   });
 
+  testWidgets('chat composer recognizes a pasted desktop image', (
+    tester,
+  ) async {
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+    ClipboardImageData? pasted;
+    final clipboardImage = ClipboardImageData(
+      Uint8List.fromList([1, 2, 3]),
+      'image/png',
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData(platform: TargetPlatform.windows),
+        home: Scaffold(
+          body: ChatComposer(
+            controller: controller,
+            enabled: true,
+            disabledHintText: '',
+            onAdd: () {},
+            onSend: () {},
+            clipboardImageReader: () async => clipboardImage,
+            onPasteImage: (image) async => pasted = image,
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byType(TextField));
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyV);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+
+    expect(pasted?.bytes, [1, 2, 3]);
+    expect(pasted?.mimeType, 'image/png');
+    expect(controller.text, isEmpty);
+  });
+
+  test('clipboard image extension follows its MIME type', () {
+    expect(clipboardImageFileExtension('image/jpeg'), 'jpg');
+    expect(clipboardImageFileExtension('image/webp'), 'webp');
+    expect(clipboardImageFileExtension(''), 'png');
+  });
+
   testWidgets('channel list extends behind the fixed current user card', (
     WidgetTester tester,
   ) async {
@@ -5309,6 +5354,29 @@ void main() {
           .width,
       lessThan(222),
     );
+  });
+
+  test('image paste replaces or adds the text field paste action', () {
+    var pasted = false;
+    final replaced = osEditableContextMenuItems(
+      [
+        const ContextMenuButtonItem(
+          onPressed: null,
+          type: ContextMenuButtonType.paste,
+        ),
+      ],
+      () => pasted = true,
+      replacePaste: true,
+    );
+    replaced.single.onPressed?.call();
+    expect(pasted, isTrue);
+
+    final added = osEditableContextMenuItems(
+      const [],
+      () {},
+      replacePaste: true,
+    );
+    expect(added.single.type, ContextMenuButtonType.paste);
   });
 
   test('detects audio attachments from windows-style names', () {

@@ -5,11 +5,19 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
-import 'package:flutter/services.dart' show Clipboard, ClipboardData;
+import 'package:flutter/services.dart'
+    show
+        Clipboard,
+        ClipboardData,
+        HardwareKeyboard,
+        KeyDownEvent,
+        KeyEvent,
+        LogicalKeyboardKey;
 
 import 'attachment_transfer_controller.dart';
 import 'audio_attachment_metadata.dart';
 import 'chat_attachment_widgets.dart';
+import 'clipboard_image.dart';
 import 'client_link_preview.dart';
 import 'openspeak_api.dart';
 import 'os_avatar.dart';
@@ -754,7 +762,7 @@ class ChatAvatar extends StatelessWidget {
   }
 }
 
-class ChatComposer extends StatelessWidget {
+class ChatComposer extends StatefulWidget {
   const ChatComposer({
     super.key,
     required this.controller,
@@ -765,6 +773,8 @@ class ChatComposer extends StatelessWidget {
     required this.disabledHintText,
     required this.onAdd,
     required this.onSend,
+    this.onPasteImage,
+    this.clipboardImageReader,
   });
 
   final TextEditingController controller;
@@ -775,57 +785,148 @@ class ChatComposer extends StatelessWidget {
   final String disabledHintText;
   final VoidCallback onAdd;
   final VoidCallback onSend;
+  final Future<void> Function(ClipboardImageData image)? onPasteImage;
+  final Future<ClipboardImageData?> Function()? clipboardImageReader;
+
+  @override
+  State<ChatComposer> createState() => _ChatComposerState();
+}
+
+class _ChatComposerState extends State<ChatComposer> {
+  final _focusNode = FocusNode();
+  late final ClipboardImagePasteListener _pasteListener;
+  bool _pasteInFlight = false;
+
+  bool get _canPasteImage =>
+      widget.enabled &&
+      !widget.readOnly &&
+      (widget.addEnabled ?? widget.enabled) &&
+      widget.onPasteImage != null;
+
+  @override
+  void initState() {
+    super.initState();
+    _pasteListener = ClipboardImagePasteListener(
+      enabled: () => _canPasteImage && _focusNode.hasFocus,
+      onPaste: _handleImagePaste,
+    );
+  }
+
+  Future<void> _handleImagePaste(ClipboardImageData image) async {
+    if (!_canPasteImage || _pasteInFlight) return;
+    _pasteInFlight = true;
+    try {
+      await widget.onPasteImage!(image);
+    } finally {
+      _pasteInFlight = false;
+    }
+  }
+
+  Future<bool> _readAndPasteImage() async {
+    if (!_canPasteImage || _pasteInFlight) return _pasteInFlight;
+    final image = await (widget.clipboardImageReader ?? readClipboardImage)();
+    if (image == null) return false;
+    await _handleImagePaste(image);
+    return true;
+  }
+
+  Future<void> _pasteFromShortcut() async {
+    if (await _readAndPasteImage()) return;
+    final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text;
+    if (!mounted || !_canPasteImage || text == null || text.isEmpty) return;
+    final value = widget.controller.value;
+    final selection = value.selection.isValid
+        ? value.selection
+        : TextSelection.collapsed(offset: value.text.length);
+    widget.controller.value = value.replaced(selection, text);
+  }
+
+  KeyEventResult _handlePasteShortcut(FocusNode _, KeyEvent event) {
+    if (clipboardImagePasteEventsSupported ||
+        !_canPasteImage ||
+        event is! KeyDownEvent) {
+      return KeyEventResult.ignored;
+    }
+    final keyboard = HardwareKeyboard.instance;
+    final modifierPressed = Theme.of(context).platform == TargetPlatform.macOS
+        ? keyboard.isMetaPressed
+        : keyboard.isControlPressed;
+    final pastePressed =
+        event.logicalKey == LogicalKeyboardKey.keyV && modifierPressed;
+    final insertPressed =
+        event.logicalKey == LogicalKeyboardKey.insert &&
+        keyboard.isShiftPressed;
+    if (!pastePressed && !insertPressed) return KeyEventResult.ignored;
+    unawaited(_pasteFromShortcut());
+    return KeyEventResult.handled;
+  }
 
   @override
   Widget build(BuildContext context) {
+    final textField = TextField(
+      focusNode: _focusNode,
+      controller: widget.controller,
+      enabled: widget.enabled,
+      readOnly: widget.readOnly,
+      contextMenuBuilder: (context, editableTextState) =>
+          osEditableTextContextMenuBuilder(
+            context,
+            editableTextState,
+            onPaste: _canPasteImage ? _readAndPasteImage : null,
+          ),
+      minLines: 1,
+      maxLines: 4,
+      textInputAction: TextInputAction.send,
+      onEditingComplete: () {},
+      onSubmitted: widget.readOnly ? null : (_) => widget.onSend(),
+      decoration: InputDecoration(
+        hintText: widget.enabled ? widget.hintText : widget.disabledHintText,
+        filled: true,
+        fillColor: const Color(0xFF232327),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 12,
+          vertical: 13,
+        ),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: const BorderSide(color: Color(0xFF2B2B30)),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: const BorderSide(color: Color(0xFF2B2B30)),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: const BorderSide(color: OsColors.rowHover),
+        ),
+        prefixIcon: IconButton(
+          tooltip: '添加文件',
+          onPressed: (widget.addEnabled ?? widget.enabled)
+              ? widget.onAdd
+              : null,
+          icon: const Icon(Icons.add_circle, size: 22),
+        ),
+        suffixIcon: IconButton(
+          tooltip: '发送',
+          onPressed: widget.enabled && !widget.readOnly ? widget.onSend : null,
+          icon: const Icon(Icons.send, size: 20),
+        ),
+      ),
+    );
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
       decoration: const BoxDecoration(
         border: Border(top: BorderSide(color: OsColors.divider)),
       ),
-      child: TextField(
-        controller: controller,
-        enabled: enabled,
-        readOnly: readOnly,
-        contextMenuBuilder: osEditableTextContextMenuBuilder,
-        minLines: 1,
-        maxLines: 4,
-        textInputAction: TextInputAction.send,
-        onEditingComplete: () {},
-        onSubmitted: readOnly ? null : (_) => onSend(),
-        decoration: InputDecoration(
-          hintText: enabled ? hintText : disabledHintText,
-          filled: true,
-          fillColor: const Color(0xFF232327),
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 12,
-            vertical: 13,
-          ),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: const BorderSide(color: Color(0xFF2B2B30)),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: const BorderSide(color: Color(0xFF2B2B30)),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(8),
-            borderSide: const BorderSide(color: OsColors.rowHover),
-          ),
-          prefixIcon: IconButton(
-            tooltip: '添加文件',
-            onPressed: (addEnabled ?? enabled) ? onAdd : null,
-            icon: const Icon(Icons.add_circle, size: 22),
-          ),
-          suffixIcon: IconButton(
-            tooltip: '发送',
-            onPressed: enabled && !readOnly ? onSend : null,
-            icon: const Icon(Icons.send, size: 20),
-          ),
-        ),
-      ),
+      child: Focus(onKeyEvent: _handlePasteShortcut, child: textField),
     );
+  }
+
+  @override
+  void dispose() {
+    _pasteListener.dispose();
+    _focusNode.dispose();
+    super.dispose();
   }
 }
 

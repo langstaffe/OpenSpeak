@@ -35,6 +35,7 @@ import 'client_audio_settings.dart';
 import 'client_link_preview.dart';
 import 'client_log.dart';
 import 'client_session_store.dart';
+import 'clipboard_image.dart';
 import 'device_identity_service.dart';
 import 'direct_message.dart';
 import 'local_profile_service.dart';
@@ -3032,10 +3033,113 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     });
   }
 
+  Future<void> handleClipboardImagePaste(ClipboardImageData image) async {
+    if (!mounted || image.bytes.isEmpty) return;
+    final direct = chatScope == ChatScope.direct;
+    final channel = selectedChannel;
+    final peer = selectedDirectUser();
+    final targetId = direct ? peer?.userId : channel?.id;
+    final permission = direct
+        ? 'direct.send_image'
+        : 'channel.messages.send_image';
+    if (targetId == null || !hasServerPermission(permission)) return;
+    final destination = direct
+        ? '私聊 ${displayNameForUser(peer!.userId)}'
+        : '# ${channel!.name}';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: const Color(0xFF232327),
+        title: const Text('发送剪贴板图片？'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: SizedBox(
+                height: 220,
+                width: double.infinity,
+                child: Image.memory(
+                  image.bytes,
+                  fit: BoxFit.contain,
+                  cacheWidth:
+                      (480 * MediaQuery.devicePixelRatioOf(dialogContext))
+                          .round(),
+                  errorBuilder: (_, _, _) => const Center(
+                    child: Icon(Icons.broken_image_outlined, size: 48),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text('发送到 $destination'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('确定'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final targetUnchanged = direct
+        ? chatScope == ChatScope.direct &&
+              selectedDirectUser()?.userId == targetId
+        : chatScope == ChatScope.channel && selectedChannel?.id == targetId;
+    if (!targetUnchanged || !hasServerPermission(permission)) {
+      setState(() => error = '聊天目标或发送权限已变化，请重新粘贴');
+      return;
+    }
+
+    final mimeType = image.mimeType.trim().isEmpty
+        ? 'image/png'
+        : image.mimeType;
+    final name =
+        'clipboard-${DateTime.now().microsecondsSinceEpoch}.'
+        '${clipboardImageFileExtension(mimeType)}';
+    File? temporaryFile;
+    try {
+      final XFile file;
+      if (kIsWeb) {
+        file = XFile.fromData(image.bytes, name: name, mimeType: mimeType);
+      } else {
+        temporaryFile = File(
+          '${Directory.systemTemp.path}${Platform.pathSeparator}'
+          'openspeak-$name',
+        );
+        await temporaryFile.writeAsBytes(image.bytes, flush: true);
+        file = XFile(temporaryFile.path, name: name, mimeType: mimeType);
+      }
+      if (!mounted) {
+        await temporaryFile?.delete();
+        return;
+      }
+      enqueueAttachmentUploads(
+        [file],
+        direct: direct,
+        targetId: targetId,
+        temporary: temporaryFile != null,
+      );
+    } catch (exception) {
+      try {
+        await temporaryFile?.delete();
+      } catch (_) {}
+      if (mounted) setState(() => error = '读取剪贴板图片失败: $exception');
+    }
+  }
+
   void enqueueAttachmentUploads(
     List<XFile> files, {
     required bool direct,
     required String targetId,
+    bool temporary = false,
   }) {
     if (files.isEmpty) return;
     setState(() {
@@ -3046,6 +3150,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
             direct: direct,
             targetId: targetId,
             image: isImageFile(file),
+            temporary: temporary,
           ),
         );
       }
@@ -3154,6 +3259,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         fileId: result.file.id,
         originalName: result.file.originalName,
         sizeBytes: fileLength,
+        temporary: task.temporary,
       );
     }
     if (task.cancelToken.isCancelled || !mounted) return;
@@ -3233,6 +3339,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         fileId: directFile.id,
         originalName: directFile.originalName,
         sizeBytes: fileLength,
+        temporary: task.temporary,
       );
     }
   }
@@ -3323,19 +3430,30 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     required String fileId,
     required String originalName,
     required int sizeBytes,
+    bool temporary = false,
   }) async {
     if (fileId.isEmpty) return;
     registerLocalAttachmentSource(fileId, file, expectedSizeBytes: sizeBytes);
-    unawaited(
-      attachmentCache
-          .seedFromLocalFile(
-            fileId: fileId,
-            originalName: originalName,
-            source: file,
-            expectedSizeBytes: sizeBytes,
-          )
-          .catchError((_) => File('')),
+    final seed = attachmentCache.seedFromLocalFile(
+      fileId: fileId,
+      originalName: originalName,
+      source: file,
+      expectedSizeBytes: sizeBytes,
     );
+    if (!temporary) {
+      unawaited(seed.catchError((_) => File('')));
+      return;
+    }
+    try {
+      final cached = await seed;
+      registerLocalAttachmentSource(
+        fileId,
+        cached,
+        expectedSizeBytes: sizeBytes,
+      );
+    } catch (_) {
+      attachmentTransfers.localSources.remove(fileId);
+    }
   }
 
   void registerLocalAttachmentSource(
@@ -7066,11 +7184,12 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     final canSendText = chatScope == ChatScope.channel
         ? hasServerPermission('channel.messages.send_text')
         : hasServerPermission('direct.send_text');
+    final canSendImage = chatScope == ChatScope.channel
+        ? hasServerPermission('channel.messages.send_image')
+        : hasServerPermission('direct.send_image');
     final canSendAttachment = chatScope == ChatScope.channel
-        ? hasServerPermission('channel.messages.send_image') ||
-              hasServerPermission('channel.messages.send_file')
-        : hasServerPermission('direct.send_image') ||
-              hasServerPermission('direct.send_file');
+        ? canSendImage || hasServerPermission('channel.messages.send_file')
+        : canSendImage || hasServerPermission('direct.send_file');
     final screenShare = voiceSession.activeScreenShare;
     if (!channelEnabled && !directEnabled) {
       return Container(
@@ -7223,6 +7342,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                 ? '未选择私聊对象'
                 : '未进入频道',
             onAdd: () => unawaited(pickAndUploadAttachment()),
+            onPasteImage: canSendImage ? handleClipboardImagePaste : null,
             onSend: () => unawaited(
               chatScope == ChatScope.channel
                   ? sendChannelMessage()

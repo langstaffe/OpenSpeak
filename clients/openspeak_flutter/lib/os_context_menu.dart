@@ -24,12 +24,23 @@ List<ContextMenuButtonItem> osLocalizedContextMenuItems(
 
 List<ContextMenuButtonItem> osEditableContextMenuItems(
   List<ContextMenuButtonItem> items,
-  VoidCallback onPaste,
-) {
+  VoidCallback onPaste, {
+  bool replacePaste = false,
+}) {
   final localized = osLocalizedContextMenuItems(items);
-  if (localized.any((item) => item.type == ContextMenuButtonType.paste)) {
-    return localized;
+  final hasPaste = localized.any(
+    (item) => item.type == ContextMenuButtonType.paste,
+  );
+  if (replacePaste && hasPaste) {
+    return localized
+        .map(
+          (item) => item.type == ContextMenuButtonType.paste
+              ? item.copyWith(onPressed: onPaste)
+              : item,
+        )
+        .toList(growable: false);
   }
+  if (hasPaste) return localized;
   return [
     ...localized,
     ContextMenuButtonItem(
@@ -42,14 +53,21 @@ List<ContextMenuButtonItem> osEditableContextMenuItems(
 
 Widget osEditableTextContextMenuBuilder(
   BuildContext context,
-  EditableTextState editableTextState,
-) {
+  EditableTextState editableTextState, {
+  Future<bool> Function()? onPaste,
+}) {
+  void paste() => unawaited(() async {
+    if (onPaste != null) editableTextState.hideToolbar();
+    if (await onPaste?.call() != true) {
+      await editableTextState.pasteText(SelectionChangedCause.toolbar);
+    }
+  }());
   return OsCompactTextSelectionToolbar(
     anchors: editableTextState.contextMenuAnchors,
     buttonItems: osEditableContextMenuItems(
       editableTextState.contextMenuButtonItems,
-      () =>
-          unawaited(editableTextState.pasteText(SelectionChangedCause.toolbar)),
+      paste,
+      replacePaste: onPaste != null,
     ),
   );
 }
