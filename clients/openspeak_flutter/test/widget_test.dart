@@ -1210,6 +1210,60 @@ void main() {
     expect(calls, ['first', 'second']);
   });
 
+  test('realtime reconnect accepts Web and rejects stale desktop targets', () {
+    expect(
+      realtimeReconnectTargetIsCurrent(
+        expectedConnectionGeneration: 3,
+        currentConnectionGeneration: 3,
+        expectedServerId: 'server-a',
+        currentServerId: 'server-a',
+        expectedSavedConnectionId: null,
+        currentSavedConnectionId: null,
+      ),
+      isTrue,
+    );
+    expect(
+      realtimeReconnectTargetIsCurrent(
+        expectedConnectionGeneration: 3,
+        currentConnectionGeneration: 3,
+        expectedServerId: 'server-a',
+        currentServerId: 'server-a',
+        expectedSavedConnectionId: null,
+        currentSavedConnectionId: 'saved-a',
+      ),
+      isFalse,
+    );
+    expect(
+      realtimeReconnectTargetIsCurrent(
+        expectedConnectionGeneration: 3,
+        currentConnectionGeneration: 3,
+        expectedServerId: 'server-a',
+        currentServerId: 'server-a',
+        expectedSavedConnectionId: 'saved-a',
+        currentSavedConnectionId: 'saved-a',
+      ),
+      isTrue,
+    );
+    for (final current in const [
+      (4, 'server-a', 'saved-a'),
+      (3, 'server-b', 'saved-a'),
+      (3, null, 'saved-a'),
+      (3, 'server-a', 'saved-b'),
+    ]) {
+      expect(
+        realtimeReconnectTargetIsCurrent(
+          expectedConnectionGeneration: 3,
+          currentConnectionGeneration: current.$1,
+          expectedServerId: 'server-a',
+          currentServerId: current.$2,
+          expectedSavedConnectionId: 'saved-a',
+          currentSavedConnectionId: current.$3,
+        ),
+        isFalse,
+      );
+    }
+  });
+
   test('authoritative channel changes only move an active voice session', () {
     expect(
       shouldFollowAuthoritativeVoiceChannel(

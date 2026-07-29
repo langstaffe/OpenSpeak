@@ -136,6 +136,18 @@ bool shouldFollowAuthoritativeVoiceChannel({
     authoritativeChannelId != localChannelId &&
     authoritativeChannelId != switchingTargetId;
 
+bool realtimeReconnectTargetIsCurrent({
+  required int expectedConnectionGeneration,
+  required int currentConnectionGeneration,
+  required String expectedServerId,
+  required String? currentServerId,
+  required String? expectedSavedConnectionId,
+  required String? currentSavedConnectionId,
+}) =>
+    expectedConnectionGeneration == currentConnectionGeneration &&
+    expectedServerId == currentServerId &&
+    expectedSavedConnectionId == currentSavedConnectionId;
+
 enum ChatScope { channel, direct }
 
 bool channelChatIsVisible({
@@ -422,6 +434,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   late final AudioPlaybackController audioPlayback;
   int currentChatNewMessages = 0;
   int connectionGeneration = 0;
+  int realtimeReconnectAttempt = 0;
   late final AudioDeviceMonitor audioDeviceMonitor;
   late final MutedSpeechReminder mutedSpeechReminder;
   VoiceSessionSnapshot previousVoiceSoundSnapshot =
@@ -1887,15 +1900,27 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     OsServer server, {
     int? expectedConnectionGeneration,
   }) async {
+    final reconnectConnectionGeneration =
+        expectedConnectionGeneration ?? connectionGeneration;
+    final reconnectServerId = server.id;
+    final reconnectSavedConnectionId = selectedConnection?.id;
+    bool reconnectTargetIsCurrent() =>
+        mounted &&
+        realtimeReconnectTargetIsCurrent(
+          expectedConnectionGeneration: reconnectConnectionGeneration,
+          currentConnectionGeneration: connectionGeneration,
+          expectedServerId: reconnectServerId,
+          currentServerId: selectedServer?.id,
+          expectedSavedConnectionId: reconnectSavedConnectionId,
+          currentSavedConnectionId: selectedConnection?.id,
+        );
     return realtimeConnection.connect(
       open: () => client.openWebSocket(auth.token, dev.id, server.id),
-      canActivate: expectedConnectionGeneration == null
-          ? null
-          : () => isActiveConnectionGeneration(expectedConnectionGeneration),
+      canActivate: reconnectTargetIsCurrent,
       handleEvent: handleRealtimeEvent,
       onError: (exception, stackTrace) {
         ClientLog.error('realtime.websocket', exception, stackTrace);
-        if (mounted) {
+        if (reconnectTargetIsCurrent()) {
           setState(() => error = 'WebSocket disconnected: $exception');
         }
       },
@@ -1905,7 +1930,14 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
           'realtime.websocket',
           'closed code=$closeCode reason=${closeReason ?? ''}',
         );
-        unawaited(reconnectWebSocketAfterDrop(generation));
+        unawaited(
+          reconnectWebSocketAfterDrop(
+            generation,
+            expectedConnectionGeneration: reconnectConnectionGeneration,
+            expectedServerId: reconnectServerId,
+            expectedSavedConnectionId: reconnectSavedConnectionId,
+          ),
+        );
       },
     );
   }
@@ -2171,21 +2203,34 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     await refreshServerState(generation: activeConnectionGeneration);
   }
 
-  Future<void> reconnectWebSocketAfterDrop(int generation) async {
-    final connectionId = selectedConnection?.id;
-    if (connectionId == null) return;
+  Future<void> reconnectWebSocketAfterDrop(
+    int socketGeneration, {
+    required int expectedConnectionGeneration,
+    required String expectedServerId,
+    required String? expectedSavedConnectionId,
+  }) async {
+    bool reconnectTargetIsCurrent() =>
+        mounted &&
+        realtimeReconnectTargetIsCurrent(
+          expectedConnectionGeneration: expectedConnectionGeneration,
+          currentConnectionGeneration: connectionGeneration,
+          expectedServerId: expectedServerId,
+          currentServerId: selectedServer?.id,
+          expectedSavedConnectionId: expectedSavedConnectionId,
+          currentSavedConnectionId: selectedConnection?.id,
+        );
+    if (!reconnectTargetIsCurrent()) return;
+    final attempt = ++realtimeReconnectAttempt;
+    bool targetIsCurrent() =>
+        attempt == realtimeReconnectAttempt && reconnectTargetIsCurrent();
+    bool canRetry() =>
+        targetIsCurrent() &&
+        realtimeConnection.isCurrent(socketGeneration) &&
+        !realtimeConnection.connected;
     var delay = const Duration(milliseconds: 500);
-    while (mounted &&
-        realtimeConnection.isCurrent(generation) &&
-        !realtimeConnection.connected &&
-        selectedConnection?.id == connectionId) {
+    while (canRetry()) {
       await Future<void>.delayed(delay);
-      if (!mounted ||
-          !realtimeConnection.isCurrent(generation) ||
-          realtimeConnection.connected ||
-          selectedConnection?.id != connectionId) {
-        return;
-      }
+      if (!canRetry()) return;
       final client = api;
       final auth = session;
       final dev = device;
@@ -2199,10 +2244,11 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
           auth,
           dev,
           server,
-          connectionGeneration,
+          expectedConnectionGeneration,
         );
         return;
       } on OpenSpeakException catch (exception, stackTrace) {
+        if (!targetIsCurrent()) return;
         ClientLog.error('realtime.restore', exception, stackTrace);
         if (exception.statusCode == HttpStatus.unauthorized ||
             exception.statusCode == HttpStatus.forbidden ||
@@ -2221,8 +2267,9 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         }
         await realtimeConnection.closeForRetry();
       } catch (exception, stackTrace) {
+        if (!targetIsCurrent()) return;
         ClientLog.error('realtime.restore', exception, stackTrace);
-        if (!realtimeConnection.isCurrent(generation)) {
+        if (!realtimeConnection.isCurrent(socketGeneration)) {
           await realtimeConnection.closeForRetry();
         } else {
           try {
@@ -2232,6 +2279,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                 probeError.statusCode == HttpStatus.forbidden ||
                 probeError.code == 'https_required' ||
                 probeError.code == 'http_required') {
+              if (!targetIsCurrent()) return;
               if (kIsWeb) {
                 await disconnectCurrentServer();
                 if (mounted) {
@@ -2245,10 +2293,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
           } catch (_) {}
         }
       }
-      if (realtimeConnection.connected ||
-          !realtimeConnection.isCurrent(generation)) {
-        return;
-      }
+      if (!canRetry()) return;
       delay = Duration(
         milliseconds: (delay.inMilliseconds * 2).clamp(500, 10000),
       );
