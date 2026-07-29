@@ -20,6 +20,7 @@ import 'package:path_provider/path_provider.dart';
 import 'add_server_dialog.dart';
 import 'attachment_cache_service.dart';
 import 'attachment_transfer_controller.dart';
+import 'attachment_upload_service.dart';
 import 'audio_attachment_metadata.dart';
 import 'audio_device_monitor.dart';
 import 'audio_playback_controller.dart';
@@ -345,6 +346,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   final messageController = TextEditingController();
   final messageScrollController = ScrollController();
   final attachmentCache = AttachmentCacheService();
+  late final AttachmentUploadService attachmentUploads;
   final soundEffects = SoundEffectPlayer();
   final ownerIdentity = OwnerIdentityService();
   final deviceIdentity = DeviceIdentityService();
@@ -432,6 +434,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     super.initState();
     channelKeyController = ChannelKeyController(deviceIdentity);
     directMessageKeys = DirectMessageKeyController(deviceIdentity);
+    attachmentUploads = AttachmentUploadService(deviceIdentity);
     realtimeConnection = RealtimeConnectionController()
       ..addListener(onRealtimeConnectionChanged);
     audioPlayback = AudioPlaybackController(
@@ -3115,107 +3118,23 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     ChannelUploadResult result;
     try {
       final mode = selectedServer?.encryptionMode ?? 'none';
-      Future<ChannelUploadResult> uploadOnce() async {
-        var uploadFile = file;
-        var epochId = '';
-        var nonce = '';
-        var format = '';
-        var chunkSize = 0;
-        Directory? tempDir;
-        try {
-          if (mode == 'e2ee') {
-            final channel = channels
-                .where((item) => item.id == task.targetId)
-                .firstOrNull;
-            if (channel == null) throw OpenSpeakException('频道不存在');
-            final state = await client.getChannelE2EEState(
-              auth.token,
-              channel.id,
-            );
-            final key = await ensureChannelKey(
-              channel,
-              epochId: state.epoch.id,
-            );
-            String encryptedNonce;
-            if (kIsWeb) {
-              final encrypted = await deviceIdentity.encryptAttachmentBytes(
-                input: await file.readAsBytes(),
-                channelKey: key,
-                channelId: channel.id,
-                epochId: state.epoch.id,
-                checkCancelled: () =>
-                    task.cancelToken.throwIfCancelled('上传已取消'),
-              );
-              uploadFile = XFile.fromData(encrypted.bytes, name: 'payload');
-              encryptedNonce = encrypted.nonce;
-            } else {
-              tempDir = await Directory.systemTemp.createTemp(
-                'openspeak_e2ee_upload_',
-              );
-              final encrypted = await deviceIdentity.encryptAttachmentFile(
-                input: File(file.path),
-                output: File('${tempDir.path}${Platform.pathSeparator}payload'),
-                channelKey: key,
-                channelId: channel.id,
-                epochId: state.epoch.id,
-                checkCancelled: () =>
-                    task.cancelToken.throwIfCancelled('上传已取消'),
-              );
-              uploadFile = XFile(encrypted.file.path);
-              encryptedNonce = encrypted.nonce;
-            }
-            epochId = state.epoch.id;
-            nonce = encryptedNonce;
-            format = attachmentEncryptionFormatV1;
-            chunkSize = attachmentEncryptionChunkSize;
-          }
-          void uploadProgress(int sent, int total) =>
-              updateTransferProgress(task, sent, total);
-          return await (task.image
-              ? client.uploadChannelImage(
-                  auth.token,
-                  task.targetId,
-                  uploadFile,
-                  encryptionMode: mode,
-                  originalName: fileNameFor(file),
-                  contentType: contentTypeForPath(fileNameFor(file)),
-                  epochId: epochId,
-                  nonce: nonce,
-                  plaintextSizeBytes: mode == 'e2ee' ? fileLength : 0,
-                  attachmentFormat: format,
-                  chunkSize: chunkSize,
-                  onProgress: uploadProgress,
-                  cancelToken: task.cancelToken,
-                )
-              : client.uploadChannelFile(
-                  auth.token,
-                  task.targetId,
-                  uploadFile,
-                  encryptionMode: mode,
-                  originalName: fileNameFor(file),
-                  contentType: contentTypeForPath(fileNameFor(file)),
-                  epochId: epochId,
-                  nonce: nonce,
-                  plaintextSizeBytes: mode == 'e2ee' ? fileLength : 0,
-                  attachmentFormat: format,
-                  chunkSize: chunkSize,
-                  onProgress: uploadProgress,
-                  cancelToken: task.cancelToken,
-                ));
-        } finally {
-          if (tempDir != null && await tempDir.exists()) {
-            await tempDir.delete(recursive: true);
-          }
-        }
+      if (mode == 'e2ee' &&
+          !channels.any((channel) => channel.id == task.targetId)) {
+        throw OpenSpeakException('频道不存在');
       }
-
-      try {
-        result = await uploadOnce();
-      } on OpenSpeakException catch (exception) {
-        if (mode != 'e2ee' || exception.code != 'epoch_changed') rethrow;
-        channelKeyController.clearChannel(task.targetId);
-        result = await uploadOnce();
-      }
+      result = await attachmentUploads.uploadChannel(
+        api: client,
+        token: auth.token,
+        channelId: task.targetId,
+        file: file,
+        fileLength: fileLength,
+        image: task.image,
+        encryptionMode: mode,
+        identity: e2eeDeviceIdentity,
+        channelKeys: channelKeyController,
+        onProgress: (sent, total) => updateTransferProgress(task, sent, total),
+        cancelToken: task.cancelToken,
+      );
     } catch (_) {
       if (mounted && localMessage != null) {
         setState(() => removeOptimisticChannelMessage(localMessage.id));
@@ -3277,70 +3196,19 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       }
     }
     DirectFile directFile;
-    Directory? tempDir;
     try {
       final mode = selectedServer?.encryptionMode ?? 'none';
-      var uploadFile = file;
-      var messageId = '';
-      var senderDeviceId = '';
-      var nonce = '';
-      var format = '';
-      var chunkSize = 0;
-      var envelopes = const <Map<String, String>>[];
-      if (mode == 'e2ee') {
-        final prepared = await prepareDirectEncryption(task.targetId);
-        final scope = directEncryptionScope(
-          prepared.serverId,
-          auth.user.id,
-          task.targetId,
-        );
-        String encryptedNonce;
-        if (kIsWeb) {
-          final encrypted = await deviceIdentity.encryptAttachmentBytes(
-            input: await file.readAsBytes(),
-            channelKey: prepared.key,
-            channelId: scope,
-            epochId: prepared.messageId,
-            checkCancelled: () => task.cancelToken.throwIfCancelled('上传已取消'),
-          );
-          uploadFile = XFile.fromData(encrypted.bytes, name: 'payload');
-          encryptedNonce = encrypted.nonce;
-        } else {
-          tempDir = await Directory.systemTemp.createTemp(
-            'openspeak_e2ee_direct_',
-          );
-          final encrypted = await deviceIdentity.encryptAttachmentFile(
-            input: File(file.path),
-            output: File('${tempDir.path}${Platform.pathSeparator}payload'),
-            channelKey: prepared.key,
-            channelId: scope,
-            epochId: prepared.messageId,
-            checkCancelled: () => task.cancelToken.throwIfCancelled('上传已取消'),
-          );
-          uploadFile = XFile(encrypted.file.path);
-          encryptedNonce = encrypted.nonce;
-        }
-        messageId = prepared.messageId;
-        senderDeviceId = prepared.senderDeviceId;
-        nonce = encryptedNonce;
-        format = attachmentEncryptionFormatV1;
-        chunkSize = attachmentEncryptionChunkSize;
-        envelopes = prepared.envelopes;
-      }
-      directFile = await client.uploadDirectFile(
-        auth.token,
-        task.targetId,
-        uploadFile,
-        originalName: fileNameFor(file),
-        contentType: contentTypeForPath(fileNameFor(file)),
+      directFile = await attachmentUploads.uploadDirect(
+        api: client,
+        token: auth.token,
+        serverId: selectedServer?.id ?? '',
+        currentUserId: auth.user.id,
+        peerUserId: task.targetId,
+        file: file,
+        fileLength: fileLength,
         encryptionMode: mode,
-        messageId: messageId,
-        senderDeviceId: senderDeviceId,
-        nonce: nonce,
-        plaintextSizeBytes: mode == 'e2ee' ? fileLength : 0,
-        attachmentFormat: format,
-        chunkSize: chunkSize,
-        directEnvelopes: envelopes,
+        identity: e2eeDeviceIdentity,
+        directMessageKeys: directMessageKeys,
         onProgress: (sent, total) => updateTransferProgress(task, sent, total),
         cancelToken: task.cancelToken,
       );
@@ -3351,10 +3219,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         );
       }
       rethrow;
-    } finally {
-      if (tempDir != null && await tempDir.exists()) {
-        await tempDir.delete(recursive: true);
-      }
     }
     if (!kIsWeb) {
       await seedUploadedAttachmentCache(
@@ -3376,8 +3240,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   String createLocalAttachmentId() {
     return 'local:${DateTime.now().microsecondsSinceEpoch}';
   }
-
-  String fileNameFor(XFile file) => file.name.isEmpty ? 'upload' : file.name;
 
   String desktopFileNameFor(File file) =>
       file.uri.pathSegments.isEmpty ? 'upload' : file.uri.pathSegments.last;
