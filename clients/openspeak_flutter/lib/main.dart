@@ -24,6 +24,7 @@ import 'audio_attachment_metadata.dart';
 import 'audio_device_monitor.dart';
 import 'audio_playback_controller.dart';
 import 'browser_actions.dart';
+import 'channel_key_controller.dart';
 import 'channel_message_store.dart';
 import 'chat_attachment_widgets.dart';
 import 'chat_message_widgets.dart';
@@ -53,6 +54,8 @@ import 'sound_effects.dart';
 import 'unread_state_controller.dart';
 import 'voice_controls.dart';
 import 'voice_session_controller.dart';
+
+export 'channel_key_controller.dart' show mediaEncryptionScope;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -248,8 +251,6 @@ String directEncryptionScope(
   return 'direct:$serverId:${users[0]}:${users[1]}';
 }
 
-String mediaEncryptionScope(String channelId) => 'media:$channelId';
-
 class OpenSpeakApp extends StatelessWidget {
   const OpenSpeakApp({super.key});
 
@@ -395,10 +396,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   int messageRetractWindowMinutes = 30;
   final activity = <RealtimeEvent>[];
   final channelMessageStore = ChannelMessageStore();
-  final channelKeys = <String, SecretKeyData>{};
-  final channelKeyLoads = <String, Future<SecretKeyData>>{};
-  final channelKeyEnvelopeArrivals = <String, Completer<void>>{};
-  int channelKeyCoordinationGeneration = 0;
+  late final ChannelKeyController channelKeyController;
   final directMessageKeys = <String, SecretKeyData>{};
   E2EEDeviceIdentity? e2eeDeviceIdentity;
   String? mediaKeyReadyTransition;
@@ -440,6 +438,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   @override
   void initState() {
     super.initState();
+    channelKeyController = ChannelKeyController(deviceIdentity);
     realtimeConnection = RealtimeConnectionController()
       ..addListener(onRealtimeConnectionChanged);
     audioPlayback = AudioPlaybackController(
@@ -1006,7 +1005,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       servers = [];
       channels = [];
       channelMessageStore.reset();
-      channelKeys.clear();
+      channelKeyController.clear();
       directMessageKeys.clear();
       e2eeDeviceIdentity = null;
       directMessageStore.reset();
@@ -1438,7 +1437,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       mobileTabIndex = 0;
       mobileChatOpen = false;
       channelMessageStore.reset();
-      channelKeys.clear();
+      channelKeyController.clear();
       directMessageKeys.clear();
       directMessageStore.reset();
       unreadState.reset(serverId: server.id, userId: auth.user.id);
@@ -2266,26 +2265,20 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     setState(() => error = message);
   }
 
-  String channelKeyId(String channelId, String epochId, {bool media = false}) =>
-      '$channelId:$epochId${media ? ':media' : ''}';
-
   void resetChannelKeyCoordination() {
-    channelKeyCoordinationGeneration += 1;
     channelEnvelopeRefreshTimer?.cancel();
     channelEnvelopeRefreshTimer = null;
-    channelKeyLoads.clear();
-    for (final arrival in channelKeyEnvelopeArrivals.values) {
-      if (!arrival.isCompleted) arrival.complete();
-    }
-    channelKeyEnvelopeArrivals.clear();
+    channelKeyController.resetCoordination();
   }
 
   void handleChannelEnvelopeCreated(RealtimeEvent event, {bool media = false}) {
     final epochId = event.payload['epoch_id'] as String? ?? '';
     if (event.channelId.isEmpty || epochId.isEmpty) return;
-    final key = channelKeyId(event.channelId, epochId, media: media);
-    final arrival = channelKeyEnvelopeArrivals.remove(key);
-    if (arrival != null && !arrival.isCompleted) arrival.complete();
+    channelKeyController.handleEnvelopeCreated(
+      event.channelId,
+      epochId,
+      media: media,
+    );
     if (media || event.channelId != selectedChannel?.id) return;
     channelEnvelopeRefreshTimer?.cancel();
     channelEnvelopeRefreshTimer = Timer(const Duration(milliseconds: 150), () {
@@ -2300,270 +2293,20 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     String? epochId,
     bool media = false,
   }) async {
-    if (epochId != null) {
-      final cached =
-          channelKeys[channelKeyId(channel.id, epochId, media: media)];
-      if (cached != null) return cached;
-    }
-    final loadId = channelKeyId(channel.id, epochId ?? 'current', media: media);
-    final pending = channelKeyLoads[loadId];
-    if (pending != null) return pending;
-    final coordinationGeneration = channelKeyCoordinationGeneration;
-    final load = _loadChannelKey(
-      channel,
-      epochId: epochId,
-      retry: 0,
-      media: media,
-      coordinationGeneration: coordinationGeneration,
-    );
-    channelKeyLoads[loadId] = load;
-    try {
-      return await load;
-    } finally {
-      if (identical(channelKeyLoads[loadId], load)) {
-        channelKeyLoads.remove(loadId);
-      }
-    }
-  }
-
-  Future<SecretKeyData> _loadChannelKey(
-    Channel channel, {
-    String? epochId,
-    required int retry,
-    required bool media,
-    required int coordinationGeneration,
-  }) async {
-    ensureChannelKeyCoordinationActive(coordinationGeneration);
     final client = api;
     final auth = session;
     final identity = e2eeDeviceIdentity;
     if (client == null || auth == null || identity == null) {
       throw OpenSpeakException('当前设备没有端到端加密密钥');
     }
-    if (epochId != null) {
-      final cached =
-          channelKeys[channelKeyId(channel.id, epochId, media: media)];
-      if (cached != null) return cached;
-    }
-    final state = await client.getChannelE2EEState(
-      auth.token,
-      channel.id,
-      media: media,
-    );
-    ensureChannelKeyCoordinationActive(coordinationGeneration);
-    final targetEpochId = epochId ?? state.epoch.id;
-    final cached =
-        channelKeys[channelKeyId(channel.id, targetEpochId, media: media)];
-    if (cached != null) return cached;
-    final envelopes = await client.listKeyEnvelopes(
-      auth.token,
+    return channelKeyController.ensureKey(
+      api: client,
+      token: auth.token,
+      identity: identity,
       channelId: channel.id,
-      recipientDeviceId: identity.deviceId,
+      epochId: epochId,
       media: media,
     );
-    ensureChannelKeyCoordinationActive(coordinationGeneration);
-    final envelope = envelopes
-        .where((item) => item.epochId == targetEpochId)
-        .firstOrNull;
-    if (envelope != null) {
-      if (envelope.senderIdentityPublicKey.isEmpty) {
-        throw OpenSpeakException('无法验证频道密钥发送设备');
-      }
-      final key = await deviceIdentity.unwrapChannelKey(
-        recipient: identity,
-        channelId: media ? mediaEncryptionScope(channel.id) : channel.id,
-        epochId: targetEpochId,
-        senderDeviceId: envelope.senderDeviceId,
-        senderIdentityPublicKey: envelope.senderIdentityPublicKey,
-        ciphertext: envelope.ciphertext,
-      );
-      ensureChannelKeyCoordinationActive(coordinationGeneration);
-      channelKeys[channelKeyId(channel.id, targetEpochId, media: media)] = key;
-      if (targetEpochId == state.epoch.id) {
-        await distributeMissingChannelKeys(channel, state, key, media: media);
-      }
-      return key;
-    }
-    if (targetEpochId != state.epoch.id) {
-      throw OpenSpeakException('当前设备没有此历史周期的频道密钥');
-    }
-    if (state.devices.isEmpty ||
-        !state.devices.any((item) => item.id == identity.deviceId)) {
-      throw OpenSpeakException('当前设备尚未注册端到端加密公钥');
-    }
-    if (state.devices.any((item) => item.hasEnvelope)) {
-      final arrivalId = !media && retry == 0
-          ? channelKeyId(channel.id, targetEpochId, media: false)
-          : null;
-      final arrival = arrivalId == null
-          ? null
-          : channelKeyEnvelopeArrivals.putIfAbsent(
-              arrivalId,
-              Completer<void>.new,
-            );
-      if (!media || retry == 0) {
-        try {
-          await client.requestChannelKey(
-            auth.token,
-            channelId: channel.id,
-            epochId: state.epoch.id,
-            recipientDeviceId: identity.deviceId,
-            media: media,
-          );
-        } on OpenSpeakException catch (exception) {
-          if (arrivalId != null &&
-              identical(channelKeyEnvelopeArrivals[arrivalId], arrival)) {
-            channelKeyEnvelopeArrivals.remove(arrivalId);
-          }
-          if (retry == 0 && exception.code == 'key_not_required') {
-            return _loadChannelKey(
-              channel,
-              epochId: epochId,
-              retry: 1,
-              media: media,
-              coordinationGeneration: coordinationGeneration,
-            );
-          }
-          rethrow;
-        } catch (_) {
-          if (arrivalId != null &&
-              identical(channelKeyEnvelopeArrivals[arrivalId], arrival)) {
-            channelKeyEnvelopeArrivals.remove(arrivalId);
-          }
-          rethrow;
-        }
-      }
-      if (media && retry < 10) {
-        await Future<void>.delayed(const Duration(milliseconds: 200));
-        return _loadChannelKey(
-          channel,
-          epochId: epochId,
-          retry: retry + 1,
-          media: true,
-          coordinationGeneration: coordinationGeneration,
-        );
-      }
-      if (arrivalId != null && arrival != null) {
-        try {
-          await arrival.future.timeout(const Duration(seconds: 5));
-        } on TimeoutException {
-          // The WebSocket event may be lost during a reconnect. Recheck the
-          // server once before reporting that the key is still unavailable.
-        } finally {
-          if (identical(channelKeyEnvelopeArrivals[arrivalId], arrival)) {
-            channelKeyEnvelopeArrivals.remove(arrivalId);
-          }
-        }
-        return _loadChannelKey(
-          channel,
-          epochId: targetEpochId,
-          retry: 1,
-          media: false,
-          coordinationGeneration: coordinationGeneration,
-        );
-      }
-      throw OpenSpeakException('正在等待其他在线设备分发频道密钥');
-    }
-    final key = await deviceIdentity.newChannelKey();
-    ensureChannelKeyCoordinationActive(coordinationGeneration);
-    try {
-      await client.storeKeyEnvelopeBatch(
-        auth.token,
-        channelId: channel.id,
-        epochId: state.epoch.id,
-        senderDeviceId: identity.deviceId,
-        envelopes: await buildChannelKeyEnvelopes(
-          state,
-          identity,
-          key,
-          media: media,
-        ),
-        media: media,
-      );
-      ensureChannelKeyCoordinationActive(coordinationGeneration);
-      channelKeys[channelKeyId(channel.id, state.epoch.id, media: media)] = key;
-      return key;
-    } on OpenSpeakException catch (exception) {
-      if (retry == 0 && exception.code == 'envelope_conflict') {
-        return _loadChannelKey(
-          channel,
-          epochId: epochId,
-          retry: 1,
-          media: media,
-          coordinationGeneration: coordinationGeneration,
-        );
-      }
-      rethrow;
-    }
-  }
-
-  void ensureChannelKeyCoordinationActive(int generation) {
-    if (generation != channelKeyCoordinationGeneration) {
-      throw OpenSpeakException('频道密钥请求已取消');
-    }
-  }
-
-  Future<List<KeyEnvelopeUpload>> buildChannelKeyEnvelopes(
-    ChannelE2EEState state,
-    E2EEDeviceIdentity identity,
-    SecretKey channelKey, {
-    Iterable<ChannelE2EEDevice>? recipients,
-    bool media = false,
-  }) async {
-    final devices = recipients ?? state.devices;
-    return Future.wait(
-      devices.map(
-        (recipient) async => KeyEnvelopeUpload(
-          recipientUserId: recipient.userId,
-          recipientDeviceId: recipient.id,
-          ciphertext: await deviceIdentity.wrapChannelKey(
-            sender: identity,
-            channelId: media
-                ? mediaEncryptionScope(state.epoch.channelId)
-                : state.epoch.channelId,
-            epochId: state.epoch.id,
-            recipientDeviceId: recipient.id,
-            recipientEnvelopePublicKey: recipient.envelopePublicKey,
-            channelKey: channelKey,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Future<void> distributeMissingChannelKeys(
-    Channel channel,
-    ChannelE2EEState state,
-    SecretKey channelKey, {
-    bool media = false,
-  }) async {
-    final client = api;
-    final auth = session;
-    final identity = e2eeDeviceIdentity;
-    if (client == null || auth == null || identity == null) return;
-    final current = state.devices
-        .where((item) => item.id == identity.deviceId)
-        .firstOrNull;
-    final missing = state.devices.where((item) => !item.hasEnvelope).toList();
-    if (current?.hasEnvelope != true || missing.isEmpty) return;
-    try {
-      await client.storeKeyEnvelopeBatch(
-        auth.token,
-        channelId: channel.id,
-        epochId: state.epoch.id,
-        senderDeviceId: identity.deviceId,
-        envelopes: await buildChannelKeyEnvelopes(
-          state,
-          identity,
-          channelKey,
-          recipients: missing,
-          media: media,
-        ),
-        media: media,
-      );
-    } on OpenSpeakException catch (exception) {
-      if (exception.code != 'envelope_conflict') rethrow;
-    }
   }
 
   Future<void> handleChannelKeyRequest(
@@ -2580,27 +2323,13 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       return;
     }
     try {
-      final state = await client.getChannelE2EEState(
-        auth.token,
-        channel.id,
+      await channelKeyController.handleKeyRequest(
+        api: client,
+        token: auth.token,
+        identity: identity,
+        channelId: channel.id,
         media: media,
       );
-      final current = state.devices
-          .where((item) => item.id == identity.deviceId)
-          .firstOrNull;
-      if (current?.hasEnvelope != true) return;
-      final cached =
-          channelKeys[channelKeyId(channel.id, state.epoch.id, media: media)];
-      if (cached != null) {
-        await distributeMissingChannelKeys(
-          channel,
-          state,
-          cached,
-          media: media,
-        );
-      } else {
-        await ensureChannelKey(channel, epochId: state.epoch.id, media: media);
-      }
     } catch (exception, stackTrace) {
       ClientLog.error('e2ee.key_request', exception, stackTrace);
     }
@@ -2611,7 +2340,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         .where((item) => item.id == event.channelId)
         .firstOrNull;
     if (channel == null) return;
-    channelKeys.removeWhere((key, _) => key.startsWith('${channel.id}:'));
+    channelKeyController.clearChannel(channel.id);
     if (hasServerPermission('channel.messages.view')) {
       try {
         await ensureChannelKey(channel);
@@ -3031,7 +2760,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
           message = await sendEncrypted();
         } on OpenSpeakException catch (exception) {
           if (exception.code != 'epoch_changed') rethrow;
-          channelKeys.removeWhere((key, _) => key.startsWith('${channel.id}:'));
+          channelKeyController.clearChannel(channel.id);
           message = await sendEncrypted();
         }
       } else {
@@ -3559,9 +3288,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         result = await uploadOnce();
       } on OpenSpeakException catch (exception) {
         if (mode != 'e2ee' || exception.code != 'epoch_changed') rethrow;
-        channelKeys.removeWhere(
-          (key, _) => key.startsWith('${task.targetId}:'),
-        );
+        channelKeyController.clearChannel(task.targetId);
         result = await uploadOnce();
       }
     } catch (_) {
