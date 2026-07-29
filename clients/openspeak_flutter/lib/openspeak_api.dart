@@ -98,7 +98,6 @@ class OpenSpeakApi {
       );
 
   Uri baseUri;
-  bool _latencyConnectionWarmed = false;
   final Map<String, ({Uri uri, bool withAuthorization, DateTime expiresAt})>
   _webDownloadTargets = {};
 
@@ -107,26 +106,6 @@ class OpenSpeakApi {
       path: '${baseUri.path}$path',
       queryParameters: query,
     );
-  }
-
-  Future<double> measureLatencyMs() async {
-    if (!_latencyConnectionWarmed) {
-      await _healthProbe();
-      _latencyConnectionWarmed = true;
-    }
-    final stopwatch = Stopwatch()..start();
-    await _healthProbe();
-    stopwatch.stop();
-    return stopwatch.elapsedMicroseconds / 1000;
-  }
-
-  Future<void> _healthProbe() async {
-    final response = await http
-        .get(apiUri('/api/health'))
-        .timeout(const Duration(seconds: 5));
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw OpenSpeakException('HTTP ${response.statusCode}: health probe');
-    }
   }
 
   Future<AuthSession> login(

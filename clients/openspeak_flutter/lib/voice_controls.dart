@@ -1292,9 +1292,11 @@ class NetworkStatsCard extends StatelessWidget {
   String _loss(double? value) =>
       value == null ? '--' : '${value.toStringAsFixed(1)}%';
 
-  String _latency(double? value, double? jitter) => value == null
-      ? '--'
-      : '${value.round()} ms ± ${(jitter ?? 0).toStringAsFixed(1)} ms';
+  String _latency(double? value, double? deviation) {
+    if (value == null) return '--';
+    if (deviation == null) return '${value.round()} ms';
+    return '${value.round()} ms ± ${deviation.toStringAsFixed(1)} ms';
+  }
 
   @override
   Widget build(BuildContext context) {

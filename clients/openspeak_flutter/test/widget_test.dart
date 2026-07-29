@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' show PointerDeviceKind;
 
@@ -4276,7 +4277,7 @@ void main() {
     },
   );
 
-  test('voice media resets do not clear server latency', () {
+  test('voice media resets do not clear ICE latency', () {
     final snapshot = VoiceSessionSnapshot.initial().copyWith(
       upstreamPacketLoss: 1,
       downstreamPacketLoss: 2,
@@ -4290,11 +4291,26 @@ void main() {
     expect(mediaReset.latencyMs, 80);
     expect(mediaReset.latencyJitterMs, 4);
 
+    final upstreamReset = snapshot.copyWith(clearUpstreamPacketLoss: true);
+    expect(upstreamReset.upstreamPacketLoss, isNull);
+    expect(upstreamReset.downstreamPacketLoss, 2);
+
+    final downstreamReset = snapshot.copyWith(clearDownstreamPacketLoss: true);
+    expect(downstreamReset.upstreamPacketLoss, 1);
+    expect(downstreamReset.downstreamPacketLoss, isNull);
+
     final latencyReset = snapshot.copyWith(clearLatencyStats: true);
     expect(latencyReset.upstreamPacketLoss, 1);
     expect(latencyReset.downstreamPacketLoss, 2);
     expect(latencyReset.latencyMs, isNull);
     expect(latencyReset.latencyJitterMs, isNull);
+  });
+
+  test('packet loss needs an RTP packet interval', () {
+    expect(sentPacketLossPercent(sent: 0, lost: 0), isNull);
+    expect(sentPacketLossPercent(sent: 0, lost: 1), isNull);
+    expect(sentPacketLossPercent(sent: 100, lost: 20), 20);
+    expect(receivedPacketLossPercent(received: 80, lost: 20), 20);
   });
 
   test('unchanged LiveKit room state does not refresh the voice snapshot', () {
@@ -4524,6 +4540,57 @@ void main() {
     );
   });
 
+  test('transport-selected ICE pair wins over the legacy selected flag', () {
+    final pair = selectedCandidatePairReport([
+      rtc.StatsReport('transport', 'transport', 1, {
+        'selectedCandidatePairId': 'current',
+      }),
+      rtc.StatsReport('legacy', 'candidate-pair', 1, {
+        'selected': true,
+        'currentRoundTripTime': 0.5,
+      }),
+      rtc.StatsReport('current', 'candidate-pair', 1, {
+        'currentRoundTripTime': 0.02,
+      }),
+    ]);
+
+    expect(pair?.id, 'current');
+  });
+
+  test('ICE latency uses fresh responses and keeps the latest five', () {
+    final sampler = IceLatencySampler();
+
+    List<rtc.StatsReport> reports(String id, num responses, num rttSeconds) => [
+      rtc.StatsReport('transport', 'transport', 1, {
+        'selectedCandidatePairId': id,
+      }),
+      rtc.StatsReport(id, 'candidate-pair', 1, {
+        'responsesReceived': responses,
+        'currentRoundTripTime': rttSeconds,
+      }),
+    ];
+
+    expect(sampler.update(reports('pair-a', 1, 0.01)), isTrue);
+    expect(sampler.summary.mean, 10);
+    expect(sampler.summary.deviation, isNull);
+    expect(sampler.update(reports('pair-a', 1, 0.5)), isFalse);
+    expect(sampler.summary.mean, 10);
+
+    for (var response = 2; response <= 6; response += 1) {
+      sampler.update(reports('pair-a', response, response / 100));
+    }
+    expect(sampler.summary.mean, 40);
+    expect(sampler.summary.deviation, closeTo(math.sqrt(200), 0.0001));
+
+    expect(sampler.update(reports('pair-b', 1, 0.025)), isTrue);
+    expect(sampler.summary.mean, 25);
+    expect(sampler.summary.deviation, isNull);
+    expect(sampler.update(reports('pair-b', 3, 0.03)), isTrue);
+    expect(sampler.update(reports('pair-b', 1, 0.04)), isTrue);
+    expect(sampler.summary.mean, 40);
+    expect(sampler.summary.deviation, isNull);
+  });
+
   test('screen share qualities are the cross product of role permissions', () {
     final qualities = allowedScreenShareQualities({
       voiceScreenSharePermission,
@@ -4744,6 +4811,27 @@ void main() {
     expect(find.text('2.8%'), findsOneWidget);
     expect(find.text('延迟'), findsOneWidget);
     expect(find.text('86 ms ± 3.5 ms'), findsOneWidget);
+  });
+
+  testWidgets('network stats show no RTP data and one RTT sample plainly', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: NetworkStatsCard(
+            upstreamPacketLoss: null,
+            downstreamPacketLoss: null,
+            latencyMs: 86.4,
+            latencyJitterMs: null,
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('--'), findsNWidgets(2));
+    expect(find.text('86 ms'), findsOneWidget);
+    expect(find.textContaining('±'), findsNothing);
   });
 
   testWidgets('muted input and output volume popovers show zero', (

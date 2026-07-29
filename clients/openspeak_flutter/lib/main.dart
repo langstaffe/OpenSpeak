@@ -969,7 +969,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       });
       await showWebRtcWarningIfNeeded();
       if (!isActiveConnectionGeneration(generation)) return;
-      voiceSession.startServerLatencyMonitor(nextApi);
       if (nextServers.isNotEmpty) {
         await updateSelectedConnectionServerMetadata(nextServers.first);
       }
@@ -1002,7 +1001,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     channelJoinQueue.invalidate();
     resetChannelKeyCoordination();
     await leaveVoiceSession(clearVoiceState: true);
-    voiceSession.stopServerLatencyMonitor();
     await realtimeConnection.close();
     if (!mounted) return;
     attachmentTransfers.cancelAndClear();

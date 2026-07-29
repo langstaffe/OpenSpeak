@@ -6,6 +6,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart' as rtc;
 import 'package:livekit_client/livekit_client.dart' as lk;
 import 'package:livekit_client/src/core/engine.dart' as livekit_internal;
 import 'package:livekit_client/src/internal/events.dart' as livekit_internal;
@@ -22,6 +23,10 @@ lk.Room createOpenSpeakLiveKitRoom({required lk.RoomOptions roomOptions}) {
     ),
   );
 }
+
+Future<List<rtc.StatsReport>> openSpeakPrimaryPeerConnectionStats(
+  lk.Room room,
+) async => await room.engine.primary?.pc.getStats() ?? const [];
 
 @visibleForTesting
 class WebJoinSafeEngine extends livekit_internal.Engine {

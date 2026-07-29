@@ -159,7 +159,9 @@ double screenShareScaleDownBy({
       .toDouble();
 }
 
-num? selectedCandidatePairValue(Iterable<rtc.StatsReport> reports, String key) {
+rtc.StatsReport? selectedCandidatePairReport(
+  Iterable<rtc.StatsReport> reports,
+) {
   String? selectedPairId;
   for (final report in reports) {
     if (report.type != 'transport') continue;
@@ -167,14 +169,18 @@ num? selectedCandidatePairValue(Iterable<rtc.StatsReport> reports, String key) {
     if (value is String && value.isNotEmpty) selectedPairId = value;
   }
   for (final report in reports) {
-    if (report.type != 'candidate-pair' ||
-        (report.id != selectedPairId && report.values['selected'] != true)) {
-      continue;
+    if (report.type != 'candidate-pair') continue;
+    if (selectedPairId != null && report.id == selectedPairId) return report;
+    if (selectedPairId == null && report.values['selected'] == true) {
+      return report;
     }
-    final value = report.values[key];
-    if (value is num) return value;
   }
   return null;
+}
+
+num? selectedCandidatePairValue(Iterable<rtc.StatsReport> reports, String key) {
+  final value = selectedCandidatePairReport(reports)?.values[key];
+  return value is num ? value : null;
 }
 
 num? selectedCandidatePairRoundTripTime(Iterable<rtc.StatsReport> reports) =>

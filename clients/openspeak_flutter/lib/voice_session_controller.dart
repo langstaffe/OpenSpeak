@@ -18,6 +18,7 @@ const _minimumWindowsVoiceAudioRms = 0.0001;
 const _noiseFloorMultiplier = 1.8;
 const _windowsWebRtcLevelIdleDelay = Duration(milliseconds: 120);
 const _microphoneThresholdReleaseDelay = Duration(milliseconds: 250);
+const _latencySampleWindowSize = 5;
 
 double effectiveParticipantOutputVolume(
   double outputVolume,
@@ -50,6 +51,89 @@ double? counterAverageDelta({
     return null;
   }
   return (total - previousTotal) / (count - previousCount);
+}
+
+double? _packetLossPercent({required num total, required num lost}) {
+  final safeTotal = total < 0 ? 0.0 : total.toDouble();
+  final safeLost = lost < 0 ? 0.0 : lost.toDouble();
+  if (safeTotal <= 0) return null;
+  return (safeLost / safeTotal * 100).clamp(0.0, 100.0).toDouble();
+}
+
+double? sentPacketLossPercent({required num sent, required num lost}) =>
+    _packetLossPercent(total: sent, lost: lost);
+
+double? receivedPacketLossPercent({required num received, required num lost}) =>
+    _packetLossPercent(total: received + lost, lost: lost);
+
+({double? mean, double? deviation}) latencySampleSummary(
+  Iterable<double> values,
+) {
+  final samples = values.toList(growable: false);
+  if (samples.isEmpty) return (mean: null, deviation: null);
+  final mean = samples.reduce((sum, value) => sum + value) / samples.length;
+  if (samples.length < 2) return (mean: mean, deviation: null);
+  final variance =
+      samples
+          .map((value) => math.pow(value - mean, 2))
+          .reduce((sum, value) => sum + value) /
+      samples.length;
+  return (mean: mean, deviation: math.sqrt(variance));
+}
+
+class IceLatencySampler {
+  String? _candidatePairId;
+  num? _responsesReceived;
+  final List<double> _samplesMs = [];
+
+  ({double? mean, double? deviation}) get summary =>
+      latencySampleSummary(_samplesMs);
+
+  bool update(Iterable<rtc.StatsReport> reports) {
+    final pair = selectedCandidatePairReport(reports);
+    if (pair == null) return false;
+
+    final pairChanged = pair.id != _candidatePairId;
+    if (pairChanged) {
+      _candidatePairId = pair.id;
+      _responsesReceived = null;
+      _samplesMs.clear();
+    }
+
+    final roundTripTime = pair.values['currentRoundTripTime'];
+    final responsesReceived = pair.values['responsesReceived'];
+    if (roundTripTime is! num || responsesReceived is! num) {
+      return pairChanged;
+    }
+    final seconds = roundTripTime.toDouble();
+    final responseCount = responsesReceived.toDouble();
+    if (!seconds.isFinite ||
+        seconds < 0 ||
+        !responseCount.isFinite ||
+        responseCount <= 0) {
+      return pairChanged;
+    }
+
+    final previousResponses = _responsesReceived;
+    if (!pairChanged && previousResponses == responsesReceived) return false;
+    if (!pairChanged &&
+        previousResponses != null &&
+        responsesReceived < previousResponses) {
+      _samplesMs.clear();
+    }
+    _responsesReceived = responsesReceived;
+    _samplesMs.add(seconds * 1000);
+    if (_samplesMs.length > _latencySampleWindowSize) {
+      _samplesMs.removeAt(0);
+    }
+    return true;
+  }
+
+  void clear() {
+    _candidatePairId = null;
+    _responsesReceived = null;
+    _samplesMs.clear();
+  }
 }
 
 Future<bool> _limitWindowsScreenShareResolution(
@@ -538,6 +622,8 @@ class VoiceSessionSnapshot {
     bool clearVoiceToken = false,
     bool clearVoiceState = false,
     bool clearMediaNetworkStats = false,
+    bool clearUpstreamPacketLoss = false,
+    bool clearDownstreamPacketLoss = false,
     bool clearLatencyStats = false,
   }) {
     return VoiceSessionSnapshot(
@@ -557,10 +643,10 @@ class VoiceSessionSnapshot {
       remoteAudioBitrate: remoteAudioBitrate ?? this.remoteAudioBitrate,
       remoteAudioBytesReceived:
           remoteAudioBytesReceived ?? this.remoteAudioBytesReceived,
-      upstreamPacketLoss: clearMediaNetworkStats
+      upstreamPacketLoss: clearMediaNetworkStats || clearUpstreamPacketLoss
           ? null
           : (upstreamPacketLoss ?? this.upstreamPacketLoss),
-      downstreamPacketLoss: clearMediaNetworkStats
+      downstreamPacketLoss: clearMediaNetworkStats || clearDownstreamPacketLoss
           ? null
           : (downstreamPacketLoss ?? this.downstreamPacketLoss),
       latencyMs: clearLatencyStats ? null : (latencyMs ?? this.latencyMs),
@@ -645,21 +731,18 @@ class VoiceSessionController extends ChangeNotifier {
   bool _voiceStateSyncPending = false;
   final List<({Completer<void> completion, bool throwOnError})>
   _voiceStateSyncWaiters = [];
-  Timer? _serverLatencyTimer;
   Timer? _audioStatsTimer;
   Timer? _liveKitReconnectTimer;
   bool _intentionalLeave = false;
   bool _reconnectInFlight = false;
   int _liveKitReconnectAttempts = 0;
   int _sessionGeneration = 0;
+  int _networkStatsRevision = 0;
   bool _disposed = false;
-  bool _latencyMeasurementInFlight = false;
   bool _audioStatsPollInFlight = false;
   Object? _microphonePreviewOwner;
   Future<void> Function()? _releaseMicrophonePreview;
-  OpenSpeakApi? _latencyApi;
-  double? _previousLatencyMs;
-  double _latencyJitterMs = 0;
+  final IceLatencySampler _latencySampler = IceLatencySampler();
   final Map<String, num> _receiverPacketsReceived = {};
   final Map<String, num> _receiverPacketsLost = {};
   final Map<String, num> _receiverJitterBufferDelay = {};
@@ -1119,7 +1202,11 @@ class VoiceSessionController extends ChangeNotifier {
     });
   }
 
-  double? _screenPacketLossPercent(num packets, num lost) {
+  double? _screenPacketLossPercent(
+    num packets,
+    num lost, {
+    required bool packetsIncludeLost,
+  }) {
     final previousPackets = _screenStatsPreviousPackets;
     final previousLost = _screenStatsPreviousLost;
     _screenStatsPreviousPackets = packets;
@@ -1127,7 +1214,9 @@ class VoiceSessionController extends ChangeNotifier {
     if (previousPackets == null || previousLost == null) return null;
     final packetDelta = packetCounterDelta(packets, previousPackets);
     final lostDelta = packetCounterDelta(lost, previousLost);
-    return _packetLossPercent(total: packetDelta + lostDelta, lost: lostDelta);
+    return packetsIncludeLost
+        ? sentPacketLossPercent(sent: packetDelta, lost: lostDelta)
+        : receivedPacketLossPercent(received: packetDelta, lost: lostDelta);
   }
 
   double? _screenBitrate(num? bytes, num? timestamp) {
@@ -1213,6 +1302,7 @@ class VoiceSessionController extends ChangeNotifier {
               : _screenPacketLossPercent(
                   sample.packetsSent!,
                   math.max<num>(0, sample.packetsLost!),
+                  packetsIncludeLost: true,
                 );
           ClientLog.write(
             'voice.screen.stats',
@@ -1266,6 +1356,7 @@ class VoiceSessionController extends ChangeNotifier {
           : _screenPacketLossPercent(
               sample.packetsReceived!,
               math.max<num>(0, sample.packetsLost!),
+              packetsIncludeLost: false,
             );
       ClientLog.write(
         'voice.screen.stats',
@@ -1433,6 +1524,7 @@ class VoiceSessionController extends ChangeNotifier {
         remoteAudioBytesReceived: 0,
         clearVoiceState: !reconnectAttempt,
         clearMediaNetworkStats: true,
+        clearLatencyStats: true,
       ),
     );
 
@@ -1644,6 +1736,7 @@ class VoiceSessionController extends ChangeNotifier {
           speaking: false,
           clearVoiceState: !preserveVoiceState,
           clearMediaNetworkStats: true,
+          clearLatencyStats: true,
         ),
       );
       if (preserveVoiceState) {
@@ -1797,6 +1890,7 @@ class VoiceSessionController extends ChangeNotifier {
         speaking: false,
         clearVoiceState: clearVoiceState,
         clearMediaNetworkStats: true,
+        clearLatencyStats: true,
       ),
       notify: notifyListeners,
     );
@@ -2597,12 +2691,15 @@ class VoiceSessionController extends ChangeNotifier {
   }
 
   void _handleReconnecting(String status) {
+    _resetNetworkStatsSamples();
     _setSnapshot(
       snapshot.copyWith(
         connecting: false,
         connected: false,
         reconnecting: true,
         status: status,
+        clearMediaNetworkStats: true,
+        clearLatencyStats: true,
       ),
     );
   }
@@ -2615,6 +2712,7 @@ class VoiceSessionController extends ChangeNotifier {
       return;
     }
     _microphoneGateOpen = false;
+    _resetNetworkStatsSamples();
     _setSnapshot(
       snapshot.copyWith(
         connecting: false,
@@ -2629,50 +2727,25 @@ class VoiceSessionController extends ChangeNotifier {
         remoteAudioBytesReceived: 0,
         speaking: false,
         clearMediaNetworkStats: true,
+        clearLatencyStats: true,
       ),
     );
     _scheduleLiveKitReconnect();
   }
 
   void _handleRemoteAudioChanged() {
+    _networkStatsRevision += 1;
     _receiverPacketsReceived.clear();
     _receiverPacketsLost.clear();
     _receiverJitterBufferDelay.clear();
     _receiverJitterBufferEmittedCount.clear();
+    _setSnapshot(snapshot.copyWith(clearDownstreamPacketLoss: true));
     unawaited(_applyMediaRouting());
     _refreshRoomSnapshot();
   }
 
   void _handleSpeakingChanged() {
     _refreshRoomSnapshot();
-  }
-
-  void _handleAudioSenderStats(lk.AudioSenderStatsEvent event) {
-    final streamId = event.stats.streamId;
-    final sent = event.stats.packetsSent ?? 0;
-    final lost = math.max<num>(0, event.stats.packetsLost ?? 0);
-    final previousSent = _senderPacketsSent[streamId];
-    final previousLost = _senderPacketsLost[streamId];
-    _senderPacketsSent[streamId] = sent;
-    _senderPacketsLost[streamId] = lost;
-    if (previousSent == null || previousLost == null) return;
-    final sentDelta = packetCounterDelta(sent, previousSent);
-    final lostDelta = packetCounterDelta(lost, previousLost);
-    _setSnapshot(
-      snapshot.copyWith(
-        upstreamPacketLoss: _packetLossPercent(
-          total: sentDelta + lostDelta,
-          lost: lostDelta,
-        ),
-      ),
-    );
-  }
-
-  double _packetLossPercent({required num total, required num lost}) {
-    final safeTotal = total < 0 ? 0.0 : total.toDouble();
-    final safeLost = lost < 0 ? 0.0 : lost.toDouble();
-    if (safeTotal <= 0) return 0;
-    return (safeLost / safeTotal * 100).clamp(0.0, 100.0).toDouble();
   }
 
   Future<void> _updateMicrophoneThresholdGate(double rms) async {
@@ -2729,27 +2802,6 @@ class VoiceSessionController extends ChangeNotifier {
     _setLocalSpeaking(false);
   }
 
-  void startServerLatencyMonitor(OpenSpeakApi api) {
-    _serverLatencyTimer?.cancel();
-    _latencyApi = api;
-    _previousLatencyMs = null;
-    _latencyJitterMs = 0;
-    _setSnapshot(snapshot.copyWith(clearLatencyStats: true));
-    unawaited(_updateServerLatency());
-    _serverLatencyTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      unawaited(_updateServerLatency());
-    });
-  }
-
-  void stopServerLatencyMonitor() {
-    _serverLatencyTimer?.cancel();
-    _serverLatencyTimer = null;
-    _latencyApi = null;
-    _previousLatencyMs = null;
-    _latencyJitterMs = 0;
-    _setSnapshot(snapshot.copyWith(clearLatencyStats: true));
-  }
-
   void _startAudioStatsPoll() {
     _audioStatsTimer?.cancel();
     unawaited(_pollAudioTrackStats());
@@ -2758,36 +2810,37 @@ class VoiceSessionController extends ChangeNotifier {
     });
   }
 
-  void _recordLatency(double latencyMs) {
-    final previous = _previousLatencyMs;
-    if (previous != null) {
-      final difference = (latencyMs - previous).abs();
-      _latencyJitterMs += (difference - _latencyJitterMs) / 16;
-    }
-    _previousLatencyMs = latencyMs;
-    _setSnapshot(
-      snapshot.copyWith(
-        latencyMs: latencyMs,
-        latencyJitterMs: _latencyJitterMs,
-      ),
-    );
+  void _resetNetworkStatsSamples() {
+    _networkStatsRevision += 1;
+    _latencySampler.clear();
+    _receiverPacketsReceived.clear();
+    _receiverPacketsLost.clear();
+    _receiverJitterBufferDelay.clear();
+    _receiverJitterBufferEmittedCount.clear();
+    _senderPacketsSent.clear();
+    _senderPacketsLost.clear();
   }
 
-  Future<void> _updateServerLatency() async {
-    final api = _latencyApi;
-    if (api == null || _latencyMeasurementInFlight || _disposed) {
+  bool _networkStatsPollIsCurrent(lk.Room room, int revision) =>
+      !_disposed &&
+      revision == _networkStatsRevision &&
+      identical(_room, room) &&
+      snapshot.connected;
+
+  Future<void> _pollPeerConnectionLatency(lk.Room room, int revision) async {
+    final reports = await openSpeakPrimaryPeerConnectionStats(room);
+    if (!_networkStatsPollIsCurrent(room, revision)) return;
+    if (!_latencySampler.update(reports)) return;
+    final summary = _latencySampler.summary;
+    final mean = summary.mean;
+    if (mean == null) {
+      _setSnapshot(snapshot.copyWith(clearLatencyStats: true));
       return;
     }
-    _latencyMeasurementInFlight = true;
-    try {
-      final latencyMs = await api.measureLatencyMs();
-      if (_disposed || !identical(_latencyApi, api)) return;
-      _recordLatency(latencyMs);
-    } catch (_) {
-      // Keep the last successful sample through brief API/network failures.
-    } finally {
-      _latencyMeasurementInFlight = false;
-    }
+    _setSnapshot(snapshot.copyWith(clearLatencyStats: true), notify: false);
+    _setSnapshot(
+      snapshot.copyWith(latencyMs: mean, latencyJitterMs: summary.deviation),
+    );
   }
 
   void _setLocalSpeaking(bool value) {
@@ -2879,21 +2932,55 @@ class VoiceSessionController extends ChangeNotifier {
         _disposed) {
       return;
     }
+    final revision = _networkStatsRevision;
     _audioStatsPollInFlight = true;
     try {
+      try {
+        await _pollPeerConnectionLatency(room, revision);
+      } catch (_) {
+        // ICE stats can be briefly unavailable while WebRTC renegotiates.
+      }
+      if (!_networkStatsPollIsCurrent(room, revision)) return;
+
+      var sentDelta = 0.0;
+      var senderLostDelta = 0.0;
+      var hasSenderPacketInterval = false;
+      final sampledSenderStreamIds = <String>{};
       final localParticipant = room.localParticipant;
       if (localParticipant != null) {
         for (final publication in localParticipant.audioTrackPublications) {
           final track = publication.track;
           if (track == null) continue;
           final stats = await track.getSenderStats();
-          if (stats != null) {
-            _handleAudioSenderStats(
-              lk.AudioSenderStatsEvent(stats: stats, currentBitrate: 0),
-            );
+          if (!_networkStatsPollIsCurrent(room, revision)) return;
+          final sent = stats?.packetsSent;
+          final rawLost = stats?.packetsLost;
+          if (stats == null || sent == null || rawLost == null) continue;
+          final streamId = stats.streamId;
+          final lost = math.max<num>(0, rawLost);
+          sampledSenderStreamIds.add(streamId);
+          final previousSent = _senderPacketsSent[streamId];
+          final previousLost = _senderPacketsLost[streamId];
+          if (previousSent != null && previousLost != null) {
+            final currentSentDelta = packetCounterDelta(sent, previousSent);
+            final currentLostDelta = packetCounterDelta(lost, previousLost);
+            if (currentSentDelta > 0) {
+              hasSenderPacketInterval = true;
+              sentDelta += currentSentDelta;
+              senderLostDelta += currentLostDelta;
+            }
           }
+          _senderPacketsSent[streamId] = sent;
+          _senderPacketsLost[streamId] = lost;
         }
       }
+      _senderPacketsSent.removeWhere(
+        (streamId, _) => !sampledSenderStreamIds.contains(streamId),
+      );
+      _senderPacketsLost.removeWhere(
+        (streamId, _) => !sampledSenderStreamIds.contains(streamId),
+      );
+
       var receivedDelta = 0.0;
       var lostDelta = 0.0;
       num remoteBitrate = 0;
@@ -2903,22 +2990,33 @@ class VoiceSessionController extends ChangeNotifier {
       final remoteTracks = _remoteAudioTracks(room);
       for (final track in remoteTracks) {
         final stats = await track.getReceiverStats();
+        if (!_networkStatsPollIsCurrent(room, revision)) return;
         if (stats == null) continue;
+        final received = stats.packetsReceived;
+        final rawLost = stats.packetsLost;
+        if (received == null || rawLost == null) continue;
         final streamId = stats.streamId;
         sampledStreamIds.add(streamId);
-        final received = stats.packetsReceived ?? 0;
-        final lost = math.max<num>(0, stats.packetsLost ?? 0);
+        final lost = math.max<num>(0, rawLost);
         final previousReceived = _receiverPacketsReceived[streamId];
         final previousLost = _receiverPacketsLost[streamId];
         if (previousReceived != null && previousLost != null) {
-          hasPacketInterval = true;
-          receivedDelta += packetCounterDelta(received, previousReceived);
-          lostDelta += packetCounterDelta(lost, previousLost);
+          final currentReceivedDelta = packetCounterDelta(
+            received,
+            previousReceived,
+          );
+          final currentLostDelta = packetCounterDelta(lost, previousLost);
+          if (currentReceivedDelta + currentLostDelta > 0) {
+            hasPacketInterval = true;
+            receivedDelta += currentReceivedDelta;
+            lostDelta += currentLostDelta;
+          }
         }
         _receiverPacketsReceived[streamId] = received;
         _receiverPacketsLost[streamId] = lost;
         if (kIsWeb && track.receiver != null) {
           final rawStats = await track.receiver!.getStats();
+          if (!_networkStatsPollIsCurrent(room, revision)) return;
           for (final report in rawStats) {
             if (report.type != 'inbound-rtp') continue;
             final delay = report.values['jitterBufferDelay'];
@@ -2958,28 +3056,24 @@ class VoiceSessionController extends ChangeNotifier {
       _receiverJitterBufferEmittedCount.removeWhere(
         (streamId, _) => !sampledStreamIds.contains(streamId),
       );
-      if (remoteTracks.isEmpty) {
-        _setSnapshot(
-          snapshot.copyWith(
-            remoteAudioBitrate: 0,
-            remoteAudioBytesReceived: 0,
-            downstreamPacketLoss: 0.0,
-          ),
-        );
-      } else if (sampledStreamIds.isNotEmpty) {
-        _setSnapshot(
-          snapshot.copyWith(
-            remoteAudioBitrate: remoteBitrate,
-            remoteAudioBytesReceived: remoteBytesReceived,
-            downstreamPacketLoss: hasPacketInterval
-                ? _packetLossPercent(
-                    total: receivedDelta + lostDelta,
-                    lost: lostDelta,
-                  )
-                : snapshot.downstreamPacketLoss,
-          ),
-        );
-      }
+      if (!_networkStatsPollIsCurrent(room, revision)) return;
+      _setSnapshot(
+        snapshot.copyWith(
+          remoteAudioBitrate: remoteBitrate,
+          remoteAudioBytesReceived: remoteBytesReceived,
+          upstreamPacketLoss: hasSenderPacketInterval
+              ? sentPacketLossPercent(sent: sentDelta, lost: senderLostDelta)
+              : null,
+          downstreamPacketLoss: hasPacketInterval
+              ? receivedPacketLossPercent(
+                  received: receivedDelta,
+                  lost: lostDelta,
+                )
+              : null,
+          clearUpstreamPacketLoss: !hasSenderPacketInterval,
+          clearDownstreamPacketLoss: !hasPacketInterval,
+        ),
+      );
     } catch (_) {
       // Desktop WebRTC drivers can briefly reject stats during track changes.
     } finally {
@@ -3801,6 +3895,7 @@ class VoiceSessionController extends ChangeNotifier {
   Future<void> _disposeRoom() async {
     final room = _room;
     _room = null;
+    _resetNetworkStatsSamples();
     final routingDone = Future.wait([
       _mediaRoutingTail,
       _microphoneRoutingTail,
@@ -3817,12 +3912,6 @@ class VoiceSessionController extends ChangeNotifier {
     _roomListener = null;
     await _disposeRemoteParticipantListeners();
     await listener?.dispose();
-    _receiverPacketsReceived.clear();
-    _receiverPacketsLost.clear();
-    _receiverJitterBufferDelay.clear();
-    _receiverJitterBufferEmittedCount.clear();
-    _senderPacketsSent.clear();
-    _senderPacketsLost.clear();
     if (room == null) {
       await routingDone;
     } else {
@@ -3878,7 +3967,6 @@ class VoiceSessionController extends ChangeNotifier {
     _intentionalLeave = true;
     _cancelLiveKitReconnect(resetAttempts: true);
     _speakingSyncTimer?.cancel();
-    _serverLatencyTimer?.cancel();
     _audioStatsTimer?.cancel();
     _thresholdGateReleaseTimer?.cancel();
     _windowsMicrophoneLevelIdleTimer?.cancel();
