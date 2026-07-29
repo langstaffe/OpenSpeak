@@ -11,7 +11,7 @@ import 'openspeak_api.dart';
 import 'os_avatar.dart';
 import 'os_settings_shell.dart';
 import 'os_theme.dart';
-import 'voice_session_controller.dart';
+import 'screen_share.dart';
 
 enum MemberManagementAction { makeAdmin, makeUser, kick, ban, unban }
 

@@ -12,6 +12,7 @@ import 'client_log.dart';
 import 'os_avatar.dart';
 import 'os_settings_shell.dart';
 import 'os_theme.dart';
+import 'screen_share.dart';
 import 'smooth_scroll.dart';
 import 'voice_session_controller.dart';
 
