@@ -8,13 +8,25 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <style>
     html, body { height: 100%; margin: 0; background: #202225; }
-    #loading { display: grid; height: 100%; place-items: center; color: #dcddde; font: 600 18px system-ui, sans-serif; }
+    #loading { position: fixed; inset: 0; z-index: 1; display: grid; place-items: center; background: #202225; color: #dcddde; font: 600 18px system-ui, sans-serif; }
+    #loading-content { width: 360px; max-width: calc(100vw - 48px); text-align: center; }
+    #loading-progress { display: block; width: 100%; height: 6px; margin-top: 18px; overflow: hidden; border: 0; border-radius: 999px; -webkit-appearance: none; appearance: none; background: #36393f; color: #7289da; }
+    #loading-progress::-webkit-progress-bar { border-radius: inherit; background: #36393f; }
+    #loading-progress::-webkit-progress-value { border-radius: inherit; background: #7289da; }
+    #loading-progress::-moz-progress-bar { border-radius: inherit; background: #7289da; }
+    #loading-stage { margin-top: 10px; color: #96989d; font-size: 13px; font-weight: 400; }
   </style>
   <link rel="icon" type="image/png" sizes="64x64" href="favicon.png">
   <title>OpenSpeak</title>
 </head>
 <body>
-  <div id="loading" role="status">OpenSpeak 正在加载，首次打开请稍候…</div>
+  <div id="loading">
+    <div id="loading-content">
+      <div>OpenSpeak 正在加载，首次打开请稍候…</div>
+      <progress id="loading-progress" aria-label="OpenSpeak 加载进度" max="5" value="0"></progress>
+      <div id="loading-stage" role="status">正在准备运行环境…</div>
+    </div>
+  </div>
   <script>
     (() => {
       const isIOSWebKit = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
@@ -31,6 +43,7 @@
       }
     })();
   </script>
-  <script src="flutter_bootstrap.js" async></script>
+  <script src="flutter_bootstrap.js" async
+          onerror="document.getElementById('loading-stage').textContent='加载失败，请刷新页面重试'"></script>
 </body>
 </html>

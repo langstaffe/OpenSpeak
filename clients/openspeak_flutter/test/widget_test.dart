@@ -65,6 +65,26 @@ void main() {
     expect(entry, contains('passive: false'));
   });
 
+  test('Web startup reports Flutter lifecycle progress', () {
+    final entry = File('web/index.html').readAsStringSync();
+    final bootstrap = File('web/flutter_bootstrap.js').readAsStringSync();
+
+    expect(entry, contains('<progress id="loading-progress"'));
+    expect(entry, contains('max="5" value="0"'));
+    expect(entry, contains('id="loading-stage"'));
+    expect(entry, contains('onerror='));
+    expect(bootstrap, contains('onEntrypointLoaded: async'));
+    expect(bootstrap, contains('initializeEngine(flutterConfig)'));
+    for (var stage = 1; stage <= 4; stage += 1) {
+      expect(bootstrap, contains('setLoadingProgress($stage,'));
+    }
+    expect(bootstrap, contains('handleResourceError'));
+    expect(bootstrap, contains("source.src.endsWith('/main.dart.js')"));
+    expect(bootstrap, contains("'flutter-first-frame'"));
+    expect(bootstrap, contains('removeLoading();'));
+    expect(bootstrap, isNot(contains('MutationObserver')));
+  });
+
   test('encrypted channel history loads each epoch key once', () {
     ChannelMessage message(String id, String epochId, String kind) =>
         ChannelMessage(
