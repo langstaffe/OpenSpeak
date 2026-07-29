@@ -19,6 +19,7 @@ import 'package:livekit_client/livekit_client.dart' as lk;
 import 'package:path_provider/path_provider.dart';
 import 'add_server_dialog.dart';
 import 'attachment_cache_service.dart';
+import 'attachment_download_service.dart';
 import 'attachment_transfer_controller.dart';
 import 'attachment_upload_service.dart';
 import 'audio_attachment_metadata.dart';
@@ -346,6 +347,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   final messageController = TextEditingController();
   final messageScrollController = ScrollController();
   final attachmentCache = AttachmentCacheService();
+  late final AttachmentDownloadService attachmentDownloads;
   late final AttachmentUploadService attachmentUploads;
   final soundEffects = SoundEffectPlayer();
   final ownerIdentity = OwnerIdentityService();
@@ -434,6 +436,10 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     super.initState();
     channelKeyController = ChannelKeyController(deviceIdentity);
     directMessageKeys = DirectMessageKeyController(deviceIdentity);
+    attachmentDownloads = AttachmentDownloadService(
+      attachmentCache,
+      deviceIdentity,
+    );
     attachmentUploads = AttachmentUploadService(deviceIdentity);
     realtimeConnection = RealtimeConnectionController()
       ..addListener(onRealtimeConnectionChanged);
@@ -3376,107 +3382,13 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     if (auth == null) {
       throw OpenSpeakException('未连接服务器');
     }
-    if (attachment.expired) {
-      throw OpenSpeakException('文件已过期');
-    }
-    final localSource = attachmentTransfers.localSources[attachment.fileId];
-    if (localSource != null &&
-        await localSource.exists() &&
-        (attachment.sizeBytes <= 0 ||
-            await localSource.length() == attachment.sizeBytes)) {
-      return localSource;
-    }
-    if (attachment.encrypted) {
-      final client = api;
-      if (client == null) {
-        throw OpenSpeakException('无法下载加密附件');
-      }
-      final existing = await attachmentCache.existingCachedFile(
-        fileId: attachment.fileId,
-        originalName: attachment.originalName,
-        expectedSizeBytes: attachment.sizeBytes,
-      );
-      if (existing != null) return existing;
-      if (attachment.attachmentFormat != attachmentEncryptionFormatV1) {
-        throw OpenSpeakException('不支持此加密附件格式');
-      }
-      final channel = attachment.direct
-          ? null
-          : channels
-                .where((item) => item.id == attachment.channelId)
-                .firstOrNull;
-      final key = attachment.direct
-          ? directMessageKeys.keyFor(attachment.epochId)
-          : channel == null
-          ? null
-          : await ensureChannelKey(channel, epochId: attachment.epochId);
-      if (key == null) throw OpenSpeakException('缺少附件解密密钥');
-      File encrypted;
-      try {
-        void onDownloadProgress(int done, int _) => onProgress?.call(
-          attachment.ciphertextSizeBytes <= 0
-              ? 0
-              : (done *
-                        attachment.sizeBytes ~/
-                        attachment.ciphertextSizeBytes) *
-                    4 ~/
-                    5,
-          attachment.sizeBytes,
-        );
-        encrypted = attachment.direct
-            ? await client.downloadDirectFile(
-                auth.token,
-                attachment.fileId,
-                '${attachment.originalName}.encrypted',
-                cancelToken: cancelToken,
-                onProgress: onDownloadProgress,
-              )
-            : await client.downloadStoredFile(
-                auth.token,
-                attachment.fileId,
-                '${attachment.originalName}.encrypted',
-                cancelToken: cancelToken,
-                onProgress: onDownloadProgress,
-              );
-      } catch (exception) {
-        if (attachment.direct && isDirectFileExpiredError(exception)) {
-          if (mounted) {
-            setState(
-              () => directMessageStore.markFileExpired(attachment.fileId),
-            );
-          }
-          throw OpenSpeakException('文件已过期');
-        }
-        rethrow;
-      }
-      try {
-        final cached = await attachmentCache.cachedFile(
-          fileId: attachment.fileId,
-          originalName: attachment.originalName,
-        );
-        return await deviceIdentity.decryptAttachmentFile(
-          input: encrypted,
-          output: cached,
-          channelKey: key,
-          channelId: attachment.channelId,
-          epochId: attachment.epochId,
-          nonce: attachment.nonce,
-          plaintextSize: attachment.sizeBytes,
-          checkCancelled: () => cancelToken?.throwIfCancelled('下载已取消'),
-          onProgress: (done, total) =>
-              onProgress?.call(total * 4 ~/ 5 + done ~/ 5, total),
-        );
-      } finally {
-        if (await encrypted.exists()) await encrypted.delete();
-      }
-    }
     try {
-      return await attachmentCache.ensureCached(
+      return await attachmentDownloads.ensureCached(
+        api: api,
         token: auth.token,
-        direct: attachment.direct,
-        fileId: attachment.fileId,
-        originalName: attachment.originalName,
-        expectedSizeBytes: attachment.sizeBytes,
+        attachment: attachment,
+        localSource: attachmentTransfers.localSources[attachment.fileId],
+        loadKey: () => loadAttachmentKey(attachment),
         onProgress: onProgress,
         cancelToken: cancelToken,
       );
@@ -3491,6 +3403,18 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     }
   }
 
+  Future<SecretKey?> loadAttachmentKey(ChatAttachment attachment) async {
+    if (attachment.direct) {
+      return directMessageKeys.keyFor(attachment.epochId);
+    }
+    final channel = channels
+        .where((item) => item.id == attachment.channelId)
+        .firstOrNull;
+    return channel == null
+        ? null
+        : ensureChannelKey(channel, epochId: attachment.epochId);
+  }
+
   Future<Uint8List> downloadAttachmentBytes(
     ChatAttachment attachment, {
     TransferProgress? onProgress,
@@ -3501,61 +3425,13 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     if (auth == null || client == null) {
       throw OpenSpeakException('未连接服务器');
     }
-    if (attachment.expired) throw OpenSpeakException('文件已过期');
-    Uint8List bytes;
-    void downloadProgress(int done, int total) {
-      if (!attachment.encrypted) {
-        onProgress?.call(done, total);
-        return;
-      }
-      final ciphertextSize = attachment.ciphertextSizeBytes > 0
-          ? attachment.ciphertextSizeBytes
-          : total;
-      final plaintextSize = attachment.sizeBytes > 0
-          ? attachment.sizeBytes
-          : total;
-      final scaled = ciphertextSize <= 0
-          ? 0
-          : done * plaintextSize ~/ ciphertextSize * 4 ~/ 5;
-      onProgress?.call(scaled, plaintextSize);
-    }
-
-    bytes = attachment.direct
-        ? await client.downloadDirectFileBytes(
-            auth.token,
-            attachment.fileId,
-            onProgress: downloadProgress,
-            cancelToken: cancelToken,
-          )
-        : await client.downloadStoredFileBytes(
-            auth.token,
-            attachment.fileId,
-            onProgress: downloadProgress,
-            cancelToken: cancelToken,
-          );
-    if (!attachment.encrypted) return bytes;
-    if (attachment.attachmentFormat != attachmentEncryptionFormatV1) {
-      throw OpenSpeakException('不支持此加密附件格式');
-    }
-    final channel = attachment.direct
-        ? null
-        : channels.where((item) => item.id == attachment.channelId).firstOrNull;
-    final key = attachment.direct
-        ? directMessageKeys.keyFor(attachment.epochId)
-        : channel == null
-        ? null
-        : await ensureChannelKey(channel, epochId: attachment.epochId);
-    if (key == null) throw OpenSpeakException('缺少附件解密密钥');
-    return deviceIdentity.decryptAttachmentBytes(
-      input: bytes,
-      channelKey: key,
-      channelId: attachment.channelId,
-      epochId: attachment.epochId,
-      nonce: attachment.nonce,
-      plaintextSize: attachment.sizeBytes,
-      checkCancelled: () => cancelToken?.throwIfCancelled('下载已取消'),
-      onProgress: (done, total) =>
-          onProgress?.call(total * 4 ~/ 5 + done ~/ 5, total),
+    return attachmentDownloads.downloadBytes(
+      api: client,
+      token: auth.token,
+      attachment: attachment,
+      loadKey: () => loadAttachmentKey(attachment),
+      onProgress: onProgress,
+      cancelToken: cancelToken,
     );
   }
 
@@ -3873,70 +3749,23 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   }) async {
     final client = api;
     final auth = session;
-    if (!attachment.encrypted) {
-      if (client == null || auth == null) throw OpenSpeakException('未连接服务器');
-      return attachment.direct
-          ? client.readDirectFileRange(
-              auth.token,
-              attachment.fileId,
-              start: start,
-              endInclusive: endInclusive,
-              rangeClient: rangeClient,
-            )
-          : client.readStoredFileRange(
-              auth.token,
-              attachment.fileId,
-              start: start,
-              endInclusive: endInclusive,
-              rangeClient: rangeClient,
-            );
-    }
-    final channel = attachment.direct
+    final channel = !attachment.encrypted || attachment.direct
         ? null
         : channels.where((item) => item.id == attachment.channelId).firstOrNull;
     if (client == null ||
         auth == null ||
-        (!attachment.direct && channel == null)) {
-      throw OpenSpeakException('无法读取加密附件');
+        (attachment.encrypted && !attachment.direct && channel == null)) {
+      throw OpenSpeakException(attachment.encrypted ? '无法读取加密附件' : '未连接服务器');
     }
-    if (attachment.attachmentFormat != attachmentEncryptionFormatV1) {
-      throw OpenSpeakException('不支持此加密附件格式');
-    }
-    final key = attachment.direct
-        ? directMessageKeys.keyFor(attachment.epochId)
-        : await ensureChannelKey(channel!, epochId: attachment.epochId);
-    if (key == null) throw OpenSpeakException('缺少附件解密密钥');
-    return deviceIdentity.decryptAttachmentRange(
-      readCipherRange: (cipherStart, cipherEnd) => attachment.direct
-          ? client.readDirectFileRange(
-              auth.token,
-              attachment.fileId,
-              start: cipherStart,
-              endInclusive: cipherEnd,
-              rangeClient: rangeClient,
-            )
-          : client.readStoredFileRange(
-              auth.token,
-              attachment.fileId,
-              start: cipherStart,
-              endInclusive: cipherEnd,
-              rangeClient: rangeClient,
-            ),
-      channelKey: key,
-      channelId: attachment.channelId,
-      epochId: attachment.epochId,
-      nonce: attachment.nonce,
-      plaintextSize: attachment.sizeBytes,
+    return attachmentDownloads.readRange(
+      api: client,
+      token: auth.token,
+      attachment: attachment,
       start: start,
       endInclusive: endInclusive,
+      loadKey: () => loadAttachmentKey(attachment),
+      rangeClient: rangeClient,
     );
-  }
-
-  bool isDirectFileExpiredError(Object error) {
-    final text = '$error';
-    return text.contains('HTTP 410') ||
-        text.contains('file has expired') ||
-        text.contains('文件已过期');
   }
 
   Future<void> openDownloadedFile(File file) async {
