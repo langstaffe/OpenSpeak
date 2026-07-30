@@ -6554,7 +6554,6 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     return Material(
       color: OsColors.sidebarBottom,
       child: InkWell(
-        onTap: () => unawaited(showMobileVoiceSheet()),
         child: Container(
           height: 48,
           padding: const EdgeInsets.symmetric(horizontal: 10),
