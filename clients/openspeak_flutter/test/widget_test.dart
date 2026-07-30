@@ -5763,6 +5763,7 @@ void main() {
     final buttonRect = tester.getRect(find.byType(IconButton));
     expect(controlRect.width, 156);
     expect(titleRect.left, greaterThan(controlRect.left + 40));
+    expect(buttonRect.left - titleRect.right, 16);
     expect(buttonRect.right, controlRect.right);
 
     await tester.tap(find.byIcon(Icons.pause));

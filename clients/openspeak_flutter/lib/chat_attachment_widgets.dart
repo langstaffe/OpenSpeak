@@ -130,7 +130,7 @@ class AudioNowPlayingControl extends StatelessWidget {
                   ],
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 16),
               IconButton.filled(
                 tooltip: playing ? '暂停' : '播放',
                 style: IconButton.styleFrom(
