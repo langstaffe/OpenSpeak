@@ -132,6 +132,16 @@ func TestVoiceAudioBitrateSetting(t *testing.T) {
 	if env.os.VoiceAudioBitrateKbps != 64 {
 		t.Fatalf("default bitrate = %d", env.os.VoiceAudioBitrateKbps)
 	}
+	for _, value := range []int{32, 48, 64, 80, 96} {
+		if !validVoiceAudioBitrate(value) {
+			t.Fatalf("valid bitrate rejected: %d", value)
+		}
+	}
+	for _, value := range []int{24, 72, 128} {
+		if validVoiceAudioBitrate(value) {
+			t.Fatalf("invalid bitrate accepted: %d", value)
+		}
+	}
 
 	invalid := httptest.NewRequest(http.MethodPatch, "/api/v1/servers/"+env.os.ID+"/settings", strings.NewReader(`{"voice_audio_bitrate_kbps":72}`))
 	invalid.Header.Set("Authorization", "Bearer "+env.token)

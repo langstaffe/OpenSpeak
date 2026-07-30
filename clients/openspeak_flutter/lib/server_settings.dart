@@ -1645,13 +1645,13 @@ class _OsServerSettingsDialogState extends State<OsServerSettingsDialog> {
                   child: Column(
                     children: [
                       for (final option in const [
-                        (24, '超低', '最低流量，适合网络较差 · 预计 24 kbps'),
-                        (48, '低', '节省流量，适合普通语音 · 预计 48 kbps'),
-                        (64, '中', '清晰语音，推荐默认 · 预计 64 kbps'),
-                        (96, '高', '更清晰，使用更多带宽 · 预计 96 kbps'),
-                        (128, '超高', '最高质量与带宽占用 · 预计 128 kbps'),
+                        (32, '超低', '最低流量，适合网络较差 · 预计 3.91 KiB/s'),
+                        (48, '低', '节省流量，适合普通语音 · 预计 5.86 KiB/s'),
+                        (64, '中', '清晰语音，推荐默认 · 预计 7.81 KiB/s'),
+                        (80, '高', '更清晰，使用更多带宽 · 预计 9.77 KiB/s'),
+                        (96, '超高', '最高质量与带宽占用 · 预计 11.72 KiB/s'),
                       ]) ...[
-                        if (option.$1 != 24) const SizedBox(height: 7),
+                        if (option.$1 != 32) const SizedBox(height: 7),
                         MicrophoneActivationOption(
                           icon: Icons.multitrack_audio_rounded,
                           selected: voiceAudioBitrateKbps == option.$1,

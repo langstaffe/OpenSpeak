@@ -1578,7 +1578,7 @@ func (s *Server) handleServers(w http.ResponseWriter, r *http.Request, authCtx a
 			}
 		}
 		if req.VoiceAudioBitrateKbps != nil && !validVoiceAudioBitrate(*req.VoiceAudioBitrateKbps) {
-			writeError(w, http.StatusBadRequest, "invalid_voice_audio_bitrate", "voice_audio_bitrate_kbps must be 24, 48, 64, 96, or 128")
+			writeError(w, http.StatusBadRequest, "invalid_voice_audio_bitrate", "voice_audio_bitrate_kbps must be 32, 48, 64, 80, or 96")
 			return
 		}
 		if req.ScreenShareBitrateLimits != nil && !req.ScreenShareBitrateLimits.Valid() {
@@ -2403,7 +2403,7 @@ func (s *Server) publicLiveKitURL(server store.OSServer, mediaNode *store.MediaN
 }
 
 func validVoiceAudioBitrate(value int) bool {
-	return value == 24 || value == 48 || value == 64 || value == 96 || value == 128
+	return value == 32 || value == 48 || value == 64 || value == 80 || value == 96
 }
 
 func (s *Server) handleChannelMessages(w http.ResponseWriter, r *http.Request, authCtx authContext, channelID string) {
