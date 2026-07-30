@@ -39,46 +39,62 @@ void main() {
     await room.dispose();
   });
 
-  test('Web microphone always keeps audio processing constraints', () {
-    final enabledOptions = voiceAudioCaptureOptions(
-      noiseSuppressionEnabled: true,
-      deviceId: 'microphone-1',
-    );
-    final enabled = enabledOptions.toMediaConstraintsMap();
-    final disabledOptions = voiceAudioCaptureOptions(
-      noiseSuppressionEnabled: false,
-      deviceId: 'microphone-1',
-    );
-    final disabled = disabledOptions.toMediaConstraintsMap();
-    final systemDefault = voiceAudioCaptureOptions(
-      noiseSuppressionEnabled: false,
-    ).toMediaConstraintsMap();
+  test(
+    'microphone capture keeps the requested audio processing constraints',
+    () {
+      final enabledOptions = voiceAudioCaptureOptions(
+        noiseSuppressionEnabled: true,
+        deviceId: 'microphone-1',
+      );
+      final enabled = enabledOptions.toMediaConstraintsMap();
+      final disabledOptions = voiceAudioCaptureOptions(
+        noiseSuppressionEnabled: false,
+        deviceId: 'microphone-1',
+      );
+      final disabled = disabledOptions.toMediaConstraintsMap();
+      final systemDefault = voiceAudioCaptureOptions(
+        noiseSuppressionEnabled: false,
+      ).toMediaConstraintsMap();
 
-    if (kIsWeb) {
-      expect(enabledOptions.processor?.name, 'rnnoise');
-      expect(disabledOptions.processor?.name, 'rnnoise');
-      expect(enabled['deviceId'], isNotNull);
-      expect(enabled['optional'], isNull);
-      expect(enabled['echoCancellation'], isTrue);
-      expect(enabled['autoGainControl'], isTrue);
-      expect(enabled['noiseSuppression'], isTrue);
-      expect(enabled['voiceIsolation'], isTrue);
-      expect(disabled['echoCancellation'], isTrue);
-      expect(disabled['autoGainControl'], isTrue);
-      expect(disabled['noiseSuppression'], isTrue);
-      expect(disabled['voiceIsolation'], isTrue);
-      expect(systemDefault['optional'], isNull);
-      expect(systemDefault['echoCancellation'], isTrue);
-      expect(systemDefault['autoGainControl'], isTrue);
-      expect(systemDefault['noiseSuppression'], isTrue);
-      expect(systemDefault['voiceIsolation'], isTrue);
-    } else {
-      expect(enabledOptions.processor, isNull);
-      expect(disabledOptions.processor, isNull);
-      expect(enabled['optional'], isNotEmpty);
-      expect(disabled['noiseSuppression'], isNull);
-    }
-  });
+      if (kIsWeb) {
+        expect(enabledOptions.processor?.name, 'rnnoise');
+        expect(disabledOptions.processor?.name, 'rnnoise');
+        expect(enabled['deviceId'], isNotNull);
+        expect(enabled['optional'], isNull);
+        expect(enabled['echoCancellation'], isTrue);
+        expect(enabled['autoGainControl'], isFalse);
+        expect(enabled['noiseSuppression'], isTrue);
+        expect(enabled['voiceIsolation'], isTrue);
+        expect(disabled['echoCancellation'], isTrue);
+        expect(disabled['autoGainControl'], isFalse);
+        expect(disabled['noiseSuppression'], isTrue);
+        expect(disabled['voiceIsolation'], isTrue);
+        expect(systemDefault['optional'], isNull);
+        expect(systemDefault['echoCancellation'], isTrue);
+        expect(systemDefault['autoGainControl'], isFalse);
+        expect(systemDefault['noiseSuppression'], isTrue);
+        expect(systemDefault['voiceIsolation'], isTrue);
+      } else {
+        expect(enabledOptions.processor, isNull);
+        expect(disabledOptions.processor, isNull);
+        expect(enabled['optional'], isNotEmpty);
+        final nativeEnabled = <String, dynamic>{
+          for (final option in enabled['optional'] as List<dynamic>)
+            ...option as Map<String, dynamic>,
+        };
+        final nativeDisabled = <String, dynamic>{
+          for (final option in disabled['optional'] as List<dynamic>)
+            ...option as Map<String, dynamic>,
+        };
+        for (final constraints in [nativeEnabled, nativeDisabled]) {
+          expect(constraints['googEchoCancellation'], isTrue);
+          expect(constraints['googAutoGainControl'], isFalse);
+          expect(constraints['googNoiseSuppression'], isFalse);
+          expect(constraints['googHighpassFilter'], isFalse);
+        }
+      }
+    },
+  );
 
   test('web engine connects after an immediate signaling join', () async {
     final signalClient = _ImmediateJoinSignalClient();

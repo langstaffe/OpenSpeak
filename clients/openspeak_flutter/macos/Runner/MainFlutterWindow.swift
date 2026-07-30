@@ -31,6 +31,9 @@ class MainFlutterWindow: NSWindow {
     self.contentMinSize = NSSize(width: 650, height: 450)
 
     RegisterGeneratedPlugins(registry: flutterViewController)
+    OpenSpeakAudioProcessingBridge.register(
+      with: flutterViewController.engine.binaryMessenger
+    )
 
     let channel = FlutterMethodChannel(
       name: "openspeak/global_push_to_talk",

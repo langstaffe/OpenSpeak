@@ -23,6 +23,7 @@
 #include <rtc_audio_processing.h>
 
 #include "flutter/generated_plugin_registrant.h"
+#include "rnnoise_processor.h"
 
 namespace {
 
@@ -225,13 +226,24 @@ class WebRtcCaptureLevelTap final
     if (monitor_ == monitor) monitor_ = nullptr;
   }
 
-  void Initialize(int sample_rate_hz, int num_channels) override {}
+  void SetNoiseSuppressionEnabled(bool enabled) {
+    processor_.SetEnabled(enabled);
+  }
+
+  void Initialize(int sample_rate_hz, int num_channels) override {
+    num_channels_ = num_channels;
+    processor_.Initialize(sample_rate_hz, num_channels);
+  }
   void Process(int num_bands, int num_frames, int buffer_size,
                float* buffer) override;
-  void Reset(int new_rate) override {}
-  void Release() override {}
+  void Reset(int new_rate) override {
+    processor_.Initialize(new_rate, num_channels_);
+  }
+  void Release() override { processor_.Release(); }
 
  private:
+  OpenSpeakRnnoiseProcessor processor_;
+  int num_channels_ = 0;
   std::mutex mutex_;
   WebRtcMicrophoneLevelMonitor* monitor_ = nullptr;
 };
@@ -240,6 +252,21 @@ WebRtcCaptureLevelTap& SharedWebRtcCaptureLevelTap() {
   // The plugin keeps this callback for the lifetime of its audio processor.
   static auto* tap = new WebRtcCaptureLevelTap();
   return *tap;
+}
+
+bool EnsureWebRtcCaptureProcessingInstalled() {
+  static std::mutex mutex;
+  static bool installed = false;
+  std::lock_guard<std::mutex> lock(mutex);
+  if (installed) return true;
+
+  auto* webrtc = FlutterWebRTCPluginSharedInstance();
+  if (webrtc == nullptr) return false;
+  auto audio_processing = webrtc->audio_processing();
+  if (!audio_processing) return false;
+  audio_processing->SetCapturePostProcessing(&SharedWebRtcCaptureLevelTap());
+  installed = true;
+  return true;
 }
 
 class WebRtcMicrophoneLevelMonitor : public MicrophoneLevelMonitor {
@@ -270,6 +297,7 @@ class WebRtcMicrophoneLevelMonitor : public MicrophoneLevelMonitor {
 
 void WebRtcCaptureLevelTap::Process(int num_bands, int num_frames,
                                     int buffer_size, float* buffer) {
+  processor_.Process(buffer, static_cast<std::size_t>(buffer_size));
   std::lock_guard<std::mutex> lock(mutex_);
   if (monitor_ != nullptr) monitor_->OnAudioBuffer(buffer, buffer_size);
 }
@@ -594,6 +622,32 @@ bool FlutterWindow::OnCreate() {
         }
         result->NotImplemented();
       });
+  audio_processing_channel_ =
+      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+          flutter_controller_->engine()->messenger(),
+          "openspeak/audio_processing",
+          &flutter::StandardMethodCodec::GetInstance());
+  audio_processing_channel_->SetMethodCallHandler(
+      [](const flutter::MethodCall<flutter::EncodableValue>& call,
+         std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>>
+             result) {
+        if (call.method_name() != "setNoiseSuppressionEnabled") {
+          result->NotImplemented();
+          return;
+        }
+        const auto* enabled = std::get_if<bool>(call.arguments());
+        if (enabled == nullptr) {
+          result->Error("invalid_arguments", "Expected a boolean");
+          return;
+        }
+        if (!EnsureWebRtcCaptureProcessingInstalled()) {
+          result->Error("audio_processing_unavailable",
+                        "WebRTC audio processing is unavailable");
+          return;
+        }
+        SharedWebRtcCaptureLevelTap().SetNoiseSuppressionEnabled(*enabled);
+        result->Success();
+      });
   microphone_level_event_channel_ =
       std::make_unique<flutter::EventChannel<flutter::EncodableValue>>(
           flutter_controller_->engine()->messenger(),
@@ -643,6 +697,7 @@ void FlutterWindow::OnDestroy() {
   audio_device_channel_.reset();
   microphone_level_event_sink_.reset();
   microphone_level_event_channel_.reset();
+  audio_processing_channel_.reset();
   microphone_level_channel_.reset();
   push_to_talk_channel_.reset();
   if (flutter_controller_) {
@@ -657,14 +712,12 @@ bool FlutterWindow::StartMicrophoneLevelMonitor(
     const std::string& track_id, bool use_webrtc) {
   StopMicrophoneLevelMonitor();
   if (use_webrtc) {
-    auto* webrtc = FlutterWebRTCPluginSharedInstance();
-    if (webrtc == nullptr || track_id.empty()) return false;
-    auto audio_processing = webrtc->audio_processing();
-    if (!audio_processing) return false;
+    if (track_id.empty() || !EnsureWebRtcCaptureProcessingInstalled()) {
+      return false;
+    }
     auto& tap = SharedWebRtcCaptureLevelTap();
     auto monitor = std::make_unique<WebRtcMicrophoneLevelMonitor>(
         GetHandle(), microphone_level_generation_, tap);
-    audio_processing->SetCapturePostProcessing(&tap);
     microphone_level_monitor_id_ = monitor_id;
     microphone_level_monitor_ = std::move(monitor);
     return true;

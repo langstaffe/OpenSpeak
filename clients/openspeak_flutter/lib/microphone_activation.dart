@@ -5,7 +5,51 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:livekit_client/livekit_client.dart' as lk;
 
+import 'rnnoise_audio_processor_stub.dart'
+    if (dart.library.js_interop) 'rnnoise_audio_processor_web.dart';
+
 enum MicrophoneActivationMode { pushToTalk, continuous, voiceThreshold }
+
+class _OpenSpeakAudioCaptureOptions extends lk.AudioCaptureOptions {
+  _OpenSpeakAudioCaptureOptions({
+    required bool noiseSuppressionEnabled,
+    super.deviceId,
+  }) : super(
+         echoCancellation: true,
+         autoGainControl: false,
+         noiseSuppression: kIsWeb,
+         highPassFilter: false,
+         typingNoiseDetection: false,
+         voiceIsolation: kIsWeb,
+         stopAudioCaptureOnMute: false,
+         processor: (kIsWeb || noiseSuppressionEnabled)
+             ? createRnnoiseAudioProcessor()
+             : null,
+       );
+
+  @override
+  Map<String, dynamic> toMediaConstraintsMap() {
+    final constraints = super.toMediaConstraintsMap();
+    if (kIsWeb) {
+      constraints.remove('optional');
+      constraints.addAll({
+        'echoCancellation': echoCancellation,
+        'autoGainControl': autoGainControl,
+        'noiseSuppression': noiseSuppression,
+        'voiceIsolation': voiceIsolation,
+      });
+    }
+    return constraints;
+  }
+}
+
+lk.AudioCaptureOptions voiceAudioCaptureOptions({
+  required bool noiseSuppressionEnabled,
+  String? deviceId,
+}) => _OpenSpeakAudioCaptureOptions(
+  deviceId: deviceId,
+  noiseSuppressionEnabled: noiseSuppressionEnabled,
+);
 
 const _windowsMicrophoneLevelChannel = MethodChannel(
   'openspeak/microphone_level',
@@ -427,12 +471,9 @@ class MicrophoneInputLevelPreview extends ChangeNotifier
     await _releaseCapture();
     try {
       final track = await lk.LocalAudioTrack.create(
-        lk.AudioCaptureOptions(
+        voiceAudioCaptureOptions(
+          noiseSuppressionEnabled: true,
           deviceId: deviceId == null || deviceId.isEmpty ? null : deviceId,
-          echoCancellation: true,
-          autoGainControl: true,
-          noiseSuppression: true,
-          stopAudioCaptureOnMute: false,
         ),
       );
       if (generation != _generation) {

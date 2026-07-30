@@ -58,6 +58,8 @@ class FlutterWindow : public Win32Window {
       push_to_talk_channel_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
       microphone_level_channel_;
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
+      audio_processing_channel_;
   std::unique_ptr<flutter::EventChannel<flutter::EncodableValue>>
       microphone_level_event_channel_;
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>

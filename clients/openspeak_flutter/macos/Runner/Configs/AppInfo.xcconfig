@@ -12,3 +12,6 @@ PRODUCT_BUNDLE_IDENTIFIER = com.example.openspeakFlutter
 
 // The copyright displayed in application information
 PRODUCT_COPYRIGHT = Copyright © 2026 com.example. All rights reserved.
+
+HEADER_SEARCH_PATHS = $(inherited) "$(PROJECT_DIR)/../native" "$(PROJECT_DIR)/../native/rnnoise/include" "$(PROJECT_DIR)/../native/rnnoise/src"
+SWIFT_OBJC_BRIDGING_HEADER = Runner/Runner-Bridging-Header.h

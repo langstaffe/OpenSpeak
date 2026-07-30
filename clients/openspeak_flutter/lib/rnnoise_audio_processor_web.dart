@@ -11,6 +11,8 @@ import 'client_log.dart';
 const _processorName = '@sapphi-red/web-noise-suppressor/rnnoise';
 const _workletPath = 'rnnoise/workletProcessor.js';
 const _wasmPath = 'rnnoise/rnnoise.wasm';
+const _highPassFrequencyHz = 80.0;
+const _highPassQ = 0.7071067811865476;
 
 lk.TrackProcessor<lk.AudioProcessorOptions>? createRnnoiseAudioProcessor() =>
     _RnnoiseAudioProcessor();
@@ -29,6 +31,7 @@ class _RnnoiseAudioProcessor
   web.MediaStreamTrack? _outputTrack;
   web.AudioContext? _audioContext;
   web.MediaStreamAudioSourceNode? _sourceNode;
+  web.BiquadFilterNode? _highPassNode;
   web.AudioWorkletNode? _workletNode;
   web.MediaStreamAudioDestinationNode? _destinationNode;
   web.EventListener? _visibilityListener;
@@ -85,6 +88,10 @@ class _RnnoiseAudioProcessor
       final source = context.createMediaStreamSource(
         web.MediaStream(<web.MediaStreamTrack>[inputTrack.jsTrack].toJS),
       );
+      final highPass = context.createBiquadFilter()
+        ..type = 'highpass'
+        ..frequency.value = _highPassFrequencyHz
+        ..Q.value = _highPassQ;
       final destination = context.createMediaStreamDestination();
       final worklet = web.AudioWorkletNode(
         context,
@@ -101,9 +108,11 @@ class _RnnoiseAudioProcessor
         ),
       );
       _sourceNode = source;
+      _highPassNode = highPass;
       _workletNode = worklet;
       _destinationNode = destination;
-      source.connect(worklet);
+      source.connect(highPass);
+      highPass.connect(worklet);
       worklet.connect(destination);
 
       final outputTracks = destination.stream.getAudioTracks().toDart;
@@ -123,12 +132,7 @@ class _RnnoiseAudioProcessor
       }).toJS;
       web.document.addEventListener('visibilitychange', _visibilityListener);
 
-      await inputTrack.applyConstraints({'noiseSuppression': false});
-      try {
-        await inputTrack.applyConstraints({'voiceIsolation': false});
-      } catch (_) {
-        // voiceIsolation is still experimental and unsupported in many browsers.
-      }
+      await _applyInputConstraints(browserNoiseSuppression: false);
       ClientLog.write(
         'voice.rnnoise',
         'active sample_rate=${context.sampleRate.toStringAsFixed(0)} '
@@ -158,12 +162,19 @@ class _RnnoiseAudioProcessor
   Future<void> _bypassRnnoise(String reason) async {
     if (_destroyed || _bypassed) return;
     final source = _sourceNode;
+    final highPass = _highPassNode;
     final worklet = _workletNode;
     final destination = _destinationNode;
-    if (source == null || worklet == null || destination == null) return;
+    if (source == null ||
+        highPass == null ||
+        worklet == null ||
+        destination == null) {
+      return;
+    }
     _bypassed = true;
     try {
       source.disconnect();
+      highPass.disconnect();
       worklet.disconnect();
       source.connect(destination);
       await _restoreBrowserNoiseSuppression();
@@ -178,11 +189,29 @@ class _RnnoiseAudioProcessor
 
   Future<void> _restoreBrowserNoiseSuppression() async {
     try {
-      await _inputTrack?.applyConstraints({'noiseSuppression': true});
+      await _applyInputConstraints(browserNoiseSuppression: true);
     } catch (_) {}
+  }
+
+  Future<void> _applyInputConstraints({
+    required bool browserNoiseSuppression,
+  }) async {
+    final track = _inputTrack;
+    if (track == null) return;
+    final constraints = <String, dynamic>{
+      'echoCancellation': true,
+      'autoGainControl': false,
+      'noiseSuppression': browserNoiseSuppression,
+    };
     try {
-      await _inputTrack?.applyConstraints({'voiceIsolation': true});
-    } catch (_) {}
+      await track.applyConstraints({
+        ...constraints,
+        'voiceIsolation': browserNoiseSuppression,
+      });
+    } catch (_) {
+      // voiceIsolation is experimental; keep the stable constraints intact.
+      await track.applyConstraints(constraints);
+    }
   }
 
   Future<void> _tearDown() async {
@@ -195,6 +224,9 @@ class _RnnoiseAudioProcessor
       _sourceNode?.disconnect();
     } catch (_) {}
     try {
+      _highPassNode?.disconnect();
+    } catch (_) {}
+    try {
       _workletNode?.disconnect();
       _workletNode?.port.postMessage('destroy'.toJS);
     } catch (_) {}
@@ -205,6 +237,7 @@ class _RnnoiseAudioProcessor
       await _audioContext?.close().toDart;
     } catch (_) {}
     _sourceNode = null;
+    _highPassNode = null;
     _workletNode = null;
     _destinationNode = null;
     _outputTrack = null;

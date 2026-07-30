@@ -2929,7 +2929,7 @@ void main() {
   });
 
   test(
-    'voice audio processing keeps AEC and AGC while toggling noise filters',
+    'voice audio processing keeps only AEC in native capture constraints',
     () {
       final enabled = voiceAudioCaptureOptions(
         noiseSuppressionEnabled: true,
@@ -2942,17 +2942,26 @@ void main() {
 
       expect(enabled.deviceId, 'microphone-1');
       expect(enabled.echoCancellation, isTrue);
-      expect(enabled.autoGainControl, isTrue);
-      expect(enabled.noiseSuppression, isTrue);
-      expect(enabled.highPassFilter, isTrue);
-      expect(enabled.typingNoiseDetection, isTrue);
+      expect(enabled.autoGainControl, isFalse);
+      expect(enabled.noiseSuppression, kIsWeb);
+      expect(enabled.highPassFilter, isFalse);
+      expect(enabled.typingNoiseDetection, isFalse);
+      expect(enabled.voiceIsolation, kIsWeb);
       expect(disabled.echoCancellation, isTrue);
-      expect(disabled.autoGainControl, isTrue);
-      expect(disabled.noiseSuppression, isFalse);
+      expect(disabled.autoGainControl, isFalse);
+      expect(disabled.noiseSuppression, kIsWeb);
       expect(disabled.highPassFilter, isFalse);
       expect(disabled.typingNoiseDetection, isFalse);
+      expect(disabled.voiceIsolation, kIsWeb);
     },
   );
+
+  test('native RNNoise is limited to supported desktop platforms', () {
+    expect(nativeRnnoiseSupported(TargetPlatform.macOS), isTrue);
+    expect(nativeRnnoiseSupported(TargetPlatform.windows), isTrue);
+    expect(nativeRnnoiseSupported(TargetPlatform.linux), isFalse);
+    expect(nativeRnnoiseSupported(TargetPlatform.macOS, isWeb: true), isFalse);
+  });
 
   test('participant volume multiplies global output up to 200 percent', () {
     expect(effectiveParticipantOutputVolume(1, 1), 1);

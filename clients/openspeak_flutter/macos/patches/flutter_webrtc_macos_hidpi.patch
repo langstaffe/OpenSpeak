@@ -98,6 +98,21 @@ diff --git a/macos/Classes/FlutterWebRTCPlugin.m b/macos/Classes/FlutterWebRTCPl
    self.peerConnections = [NSMutableDictionary new];
    self.localStreams = [NSMutableDictionary new];
    self.localTracks = [NSMutableDictionary new];
+diff --git a/macos/Classes/FlutterRTCMediaStream.m b/macos/Classes/FlutterRTCMediaStream.m
+--- a/macos/Classes/FlutterRTCMediaStream.m
++++ b/macos/Classes/FlutterRTCMediaStream.m
+@@ -164,9 +164,9 @@
+   audioTrack.settings = @{
+     @"deviceId" : audioDeviceId,
+     @"kind" : @"audioinput",
+-    @"autoGainControl" : @YES,
++    @"autoGainControl" : @NO,
+     @"echoCancellation" : @YES,
+-    @"noiseSuppression" : @YES,
++    @"noiseSuppression" : @NO,
+     @"channelCount" : @1,
+     @"latency" : @0,
+   };
 diff --git a/macos/Classes/FlutterScreenCaptureKitCapturer.m b/macos/Classes/FlutterScreenCaptureKitCapturer.m
 --- a/macos/Classes/FlutterScreenCaptureKitCapturer.m
 +++ b/macos/Classes/FlutterScreenCaptureKitCapturer.m

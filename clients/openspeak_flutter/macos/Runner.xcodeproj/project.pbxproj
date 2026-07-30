@@ -24,6 +24,16 @@
 		331C80D8294CF71000263BE5 /* RunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C80D7294CF71000263BE5 /* RunnerTests.swift */; };
 		335BBD1B22A9A15E00E9071D /* GeneratedPluginRegistrant.swift in Sources */ = {isa = PBXBuildFile; fileRef = 335BBD1A22A9A15E00E9071D /* GeneratedPluginRegistrant.swift */; };
 		33CC10F12044A3C60003C045 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33CC10F02044A3C60003C045 /* AppDelegate.swift */; };
+		A10000000000000000000001 /* OpenSpeakAudioProcessingBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000011 /* OpenSpeakAudioProcessingBridge.mm */; };
+		A10000000000000000000002 /* rnnoise_processor.cc in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000014 /* rnnoise_processor.cc */; };
+		A10000000000000000000003 /* celt_lpc.c in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000016 /* celt_lpc.c */; };
+		A10000000000000000000004 /* denoise.c in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000017 /* denoise.c */; };
+		A10000000000000000000005 /* kiss_fft.c in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000018 /* kiss_fft.c */; };
+		A10000000000000000000006 /* pitch.c in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000019 /* pitch.c */; };
+		A10000000000000000000007 /* rnn.c in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000001A /* rnn.c */; };
+		A10000000000000000000008 /* rnn_data.c in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000001B /* rnn_data.c */; };
+		A10000000000000000000009 /* rnn_reader.c in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000001C /* rnn_reader.c */; };
+		A1000000000000000000000A /* RNNoise COPYING in Resources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000001D /* RNNoise COPYING */; };
 		A1744A102EA0C96000C6D264 /* HardwareH264.m in Sources */ = {isa = PBXBuildFile; fileRef = A1744A0F2EA0C96000C6D264 /* HardwareH264.m */; };
 		33CC10F32044A3C60003C045 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 33CC10F22044A3C60003C045 /* Assets.xcassets */; };
 		33CC10F62044A3C60003C045 /* MainMenu.xib in Resources */ = {isa = PBXBuildFile; fileRef = 33CC10F42044A3C60003C045 /* MainMenu.xib */; };
@@ -74,6 +84,19 @@
 		335BBD1A22A9A15E00E9071D /* GeneratedPluginRegistrant.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = GeneratedPluginRegistrant.swift; sourceTree = "<group>"; };
 		33CC10ED2044A3C60003C045 /* OpenSpeak.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OpenSpeak.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		33CC10F02044A3C60003C045 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		A10000000000000000000011 /* OpenSpeakAudioProcessingBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = OpenSpeakAudioProcessingBridge.mm; sourceTree = "<group>"; };
+		A10000000000000000000012 /* OpenSpeakAudioProcessingBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = OpenSpeakAudioProcessingBridge.h; sourceTree = "<group>"; };
+		A10000000000000000000013 /* Runner-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Runner-Bridging-Header.h"; sourceTree = "<group>"; };
+		A10000000000000000000014 /* rnnoise_processor.cc */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = ../native/rnnoise_processor.cc; sourceTree = SOURCE_ROOT; };
+		A10000000000000000000015 /* rnnoise_processor.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ../native/rnnoise_processor.h; sourceTree = SOURCE_ROOT; };
+		A10000000000000000000016 /* celt_lpc.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = ../native/rnnoise/src/celt_lpc.c; sourceTree = SOURCE_ROOT; };
+		A10000000000000000000017 /* denoise.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = ../native/rnnoise/src/denoise.c; sourceTree = SOURCE_ROOT; };
+		A10000000000000000000018 /* kiss_fft.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = ../native/rnnoise/src/kiss_fft.c; sourceTree = SOURCE_ROOT; };
+		A10000000000000000000019 /* pitch.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = ../native/rnnoise/src/pitch.c; sourceTree = SOURCE_ROOT; };
+		A1000000000000000000001A /* rnn.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = ../native/rnnoise/src/rnn.c; sourceTree = SOURCE_ROOT; };
+		A1000000000000000000001B /* rnn_data.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = ../native/rnnoise/src/rnn_data.c; sourceTree = SOURCE_ROOT; };
+		A1000000000000000000001C /* rnn_reader.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = ../native/rnnoise/src/rnn_reader.c; sourceTree = SOURCE_ROOT; };
+		A1000000000000000000001D /* RNNoise COPYING */ = {isa = PBXFileReference; lastKnownFileType = text; name = "RNNoise COPYING"; path = ../native/rnnoise/COPYING; sourceTree = SOURCE_ROOT; };
 		A1744A0F2EA0C96000C6D264 /* HardwareH264.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = HardwareH264.m; sourceTree = "<group>"; };
 		33CC10F22044A3C60003C045 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; name = Assets.xcassets; path = Runner/Assets.xcassets; sourceTree = "<group>"; };
 		33CC10F52044A3C60003C045 /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.xib; name = Base; path = Base.lproj/MainMenu.xib; sourceTree = "<group>"; };
@@ -138,6 +161,7 @@
 			isa = PBXGroup;
 			children = (
 				33FAB671232836740065AC1E /* Runner */,
+				A10000000000000000000021 /* Native Audio */,
 				33CEB47122A05771004F2AC0 /* Flutter */,
 				331C80D6294CF71000263BE5 /* RunnerTests */,
 				33CC10EE2044A3C60003C045 /* Products */,
@@ -182,6 +206,9 @@
 			isa = PBXGroup;
 			children = (
 				33CC10F02044A3C60003C045 /* AppDelegate.swift */,
+				A10000000000000000000011 /* OpenSpeakAudioProcessingBridge.mm */,
+				A10000000000000000000012 /* OpenSpeakAudioProcessingBridge.h */,
+				A10000000000000000000013 /* Runner-Bridging-Header.h */,
 				A1744A0F2EA0C96000C6D264 /* HardwareH264.m */,
 				33CC11122044BFA00003C045 /* MainFlutterWindow.swift */,
 				33E51913231747F40026EE4D /* DebugProfile.entitlements */,
@@ -190,6 +217,23 @@
 				33BA886A226E78AF003329D5 /* Configs */,
 			);
 			path = Runner;
+			sourceTree = "<group>";
+		};
+		A10000000000000000000021 /* Native Audio */ = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000014 /* rnnoise_processor.cc */,
+				A10000000000000000000015 /* rnnoise_processor.h */,
+				A10000000000000000000016 /* celt_lpc.c */,
+				A10000000000000000000017 /* denoise.c */,
+				A10000000000000000000018 /* kiss_fft.c */,
+				A10000000000000000000019 /* pitch.c */,
+				A1000000000000000000001A /* rnn.c */,
+				A1000000000000000000001B /* rnn_data.c */,
+				A1000000000000000000001C /* rnn_reader.c */,
+				A1000000000000000000001D /* RNNoise COPYING */,
+			);
+			name = "Native Audio";
 			sourceTree = "<group>";
 		};
 		9CF890F8D5C9CF748A59BD8B /* Pods */ = {
@@ -328,6 +372,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A1000000000000000000000A /* RNNoise COPYING in Resources */,
 				33CC10F32044A3C60003C045 /* Assets.xcassets in Resources */,
 				33CC10F62044A3C60003C045 /* MainMenu.xib in Resources */,
 			);
@@ -450,6 +495,15 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A10000000000000000000001 /* OpenSpeakAudioProcessingBridge.mm in Sources */,
+				A10000000000000000000002 /* rnnoise_processor.cc in Sources */,
+				A10000000000000000000003 /* celt_lpc.c in Sources */,
+				A10000000000000000000004 /* denoise.c in Sources */,
+				A10000000000000000000005 /* kiss_fft.c in Sources */,
+				A10000000000000000000006 /* pitch.c in Sources */,
+				A10000000000000000000007 /* rnn.c in Sources */,
+				A10000000000000000000008 /* rnn_data.c in Sources */,
+				A10000000000000000000009 /* rnn_reader.c in Sources */,
 				A1744A102EA0C96000C6D264 /* HardwareH264.m in Sources */,
 				33CC11132044BFA00003C045 /* MainFlutterWindow.swift in Sources */,
 				33CC10F12044A3C60003C045 /* AppDelegate.swift in Sources */,

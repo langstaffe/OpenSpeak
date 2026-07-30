@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart' as rtc;
 import 'package:livekit_client/livekit_client.dart' as lk;
 
@@ -9,9 +10,9 @@ import 'client_log.dart';
 import 'livekit_room_factory.dart';
 import 'microphone_activation.dart';
 import 'openspeak_api.dart';
-import 'rnnoise_audio_processor_stub.dart'
-    if (dart.library.js_interop) 'rnnoise_audio_processor_web.dart';
 import 'screen_share.dart';
+
+export 'microphone_activation.dart' show voiceAudioCaptureOptions;
 
 const _minimumVoiceAudioRms = 0.0008;
 const _minimumWindowsVoiceAudioRms = 0.0001;
@@ -19,6 +20,21 @@ const _noiseFloorMultiplier = 1.8;
 const _windowsWebRtcLevelIdleDelay = Duration(milliseconds: 120);
 const _microphoneThresholdReleaseDelay = Duration(milliseconds: 250);
 const _latencySampleWindowSize = 5;
+const _nativeAudioProcessingChannel = OptionalMethodChannel(
+  'openspeak/audio_processing',
+);
+
+bool nativeRnnoiseSupported(TargetPlatform platform, {bool isWeb = false}) =>
+    !isWeb &&
+    (platform == TargetPlatform.macOS || platform == TargetPlatform.windows);
+
+Future<void> setNativeRnnoiseEnabled(bool enabled) async {
+  if (!nativeRnnoiseSupported(defaultTargetPlatform, isWeb: kIsWeb)) return;
+  await _nativeAudioProcessingChannel.invokeMethod<void>(
+    'setNoiseSuppressionEnabled',
+    enabled,
+  );
+}
 
 double effectiveParticipantOutputVolume(
   double outputVolume,
@@ -213,47 +229,6 @@ Future<bool> _limitWindowsScreenShareResolution(
     }
     return false;
   }
-}
-
-class _OpenSpeakAudioCaptureOptions extends lk.AudioCaptureOptions {
-  _OpenSpeakAudioCaptureOptions({
-    required bool noiseSuppressionEnabled,
-    super.deviceId,
-  }) : super(
-         echoCancellation: true,
-         autoGainControl: true,
-         noiseSuppression: kIsWeb || noiseSuppressionEnabled,
-         highPassFilter: kIsWeb || noiseSuppressionEnabled,
-         typingNoiseDetection: kIsWeb || noiseSuppressionEnabled,
-         voiceIsolation: kIsWeb || noiseSuppressionEnabled,
-         stopAudioCaptureOnMute: false,
-         processor: createRnnoiseAudioProcessor(),
-       );
-
-  @override
-  Map<String, dynamic> toMediaConstraintsMap() {
-    final constraints = super.toMediaConstraintsMap();
-    if (kIsWeb) {
-      constraints.remove('optional');
-      constraints.addAll({
-        'echoCancellation': echoCancellation,
-        'autoGainControl': autoGainControl,
-        'noiseSuppression': noiseSuppression,
-        'voiceIsolation': voiceIsolation,
-      });
-    }
-    return constraints;
-  }
-}
-
-lk.AudioCaptureOptions voiceAudioCaptureOptions({
-  required bool noiseSuppressionEnabled,
-  String? deviceId,
-}) {
-  return _OpenSpeakAudioCaptureOptions(
-    deviceId: deviceId,
-    noiseSuppressionEnabled: noiseSuppressionEnabled,
-  );
 }
 
 bool microphoneActivationGateOpen({
@@ -2031,16 +2006,26 @@ class VoiceSessionController extends ChangeNotifier {
   }
 
   Future<void> setNoiseSuppressionEnabled(bool enabled) async {
-    if (_noiseSuppressionEnabled == enabled) return;
+    if (_noiseSuppressionEnabled == enabled) {
+      await setNativeRnnoiseEnabled(enabled);
+      return;
+    }
     final previous = _noiseSuppressionEnabled;
     _noiseSuppressionEnabled = enabled;
     try {
-      await _resetMicrophoneCapture();
-      await _applyMicrophonePublishing();
+      await setNativeRnnoiseEnabled(enabled);
+      if (kIsWeb) {
+        await _resetMicrophoneCapture();
+        await _applyMicrophonePublishing();
+      }
     } catch (_) {
       _noiseSuppressionEnabled = previous;
-      await _resetMicrophoneCapture();
-      await _applyMicrophonePublishing();
+      if (kIsWeb) {
+        await _resetMicrophoneCapture();
+        await _applyMicrophonePublishing();
+      } else {
+        await setNativeRnnoiseEnabled(previous);
+      }
       rethrow;
     }
   }
