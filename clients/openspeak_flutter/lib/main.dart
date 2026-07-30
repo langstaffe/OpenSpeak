@@ -6306,6 +6306,8 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         playing:
             audioPlayback.activeFileId == attachment.fileId &&
             audioPlayback.playing,
+        position: audioPlayback.position,
+        duration: audioPlayback.duration,
         compact: compact,
         onToggle: () => unawaited(toggleAudioAttachment(attachment)),
       ),

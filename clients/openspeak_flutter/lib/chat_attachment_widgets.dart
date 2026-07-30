@@ -75,6 +75,8 @@ class AudioNowPlayingControl extends StatelessWidget {
     required this.metadataFuture,
     required this.loading,
     required this.playing,
+    required this.position,
+    required this.duration,
     required this.compact,
     required this.onToggle,
   });
@@ -83,11 +85,18 @@ class AudioNowPlayingControl extends StatelessWidget {
   final Future<AudioAttachmentMetadata> metadataFuture;
   final bool loading;
   final bool playing;
+  final Duration position;
+  final Duration duration;
   final bool compact;
   final VoidCallback onToggle;
 
   @override
   Widget build(BuildContext context) {
+    final progress = duration <= Duration.zero
+        ? 0.0
+        : (position.inMicroseconds / duration.inMicroseconds)
+              .clamp(0.0, 1.0)
+              .toDouble();
     return SizedBox(
       width: compact ? 156 : 220,
       height: 42,
@@ -131,25 +140,50 @@ class AudioNowPlayingControl extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 16),
-              IconButton.filled(
-                tooltip: playing ? '暂停' : '播放',
-                style: IconButton.styleFrom(
-                  fixedSize: const Size.square(36),
-                  minimumSize: const Size.square(36),
-                  padding: EdgeInsets.zero,
-                  backgroundColor: OsColors.blurple,
-                  foregroundColor: Colors.white,
-                ),
-                onPressed: loading ? null : onToggle,
-                icon: loading
-                    ? const SizedBox.square(
-                        dimension: 16,
+              SizedBox.square(
+                dimension: 42,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Positioned.fill(
+                      child: RotatedBox(
+                        quarterTurns: 2,
                         child: CircularProgressIndicator(
+                          key: const ValueKey('audio-now-playing-progress'),
+                          value: progress,
                           strokeWidth: 2,
                           color: Colors.white,
+                          backgroundColor: OsColors.icon,
+                          semanticsLabel: '播放进度',
+                          semanticsValue: '${(progress * 100).round()}%',
                         ),
-                      )
-                    : Icon(playing ? Icons.pause : Icons.play_arrow, size: 22),
+                      ),
+                    ),
+                    IconButton.filled(
+                      tooltip: playing ? '暂停' : '播放',
+                      style: IconButton.styleFrom(
+                        fixedSize: const Size.square(36),
+                        minimumSize: const Size.square(36),
+                        padding: EdgeInsets.zero,
+                        backgroundColor: OsColors.blurple,
+                        foregroundColor: Colors.white,
+                      ),
+                      onPressed: loading ? null : onToggle,
+                      icon: loading
+                          ? const SizedBox.square(
+                              dimension: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : Icon(
+                              playing ? Icons.pause : Icons.play_arrow,
+                              size: 22,
+                            ),
+                    ),
+                  ],
+                ),
               ),
             ],
           );

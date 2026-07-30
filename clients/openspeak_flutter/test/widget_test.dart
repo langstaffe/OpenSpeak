@@ -5743,6 +5743,8 @@ void main() {
             ),
             loading: false,
             playing: true,
+            position: const Duration(seconds: 25),
+            duration: const Duration(seconds: 100),
             compact: true,
             onToggle: () => toggles += 1,
           ),
@@ -5753,18 +5755,30 @@ void main() {
 
     final title = tester.widget<Text>(find.text('歌名'));
     final artist = tester.widget<Text>(find.text('作者'));
+    final progressFinder = find.byKey(
+      const ValueKey('audio-now-playing-progress'),
+    );
+    final progress = tester.widget<CircularProgressIndicator>(progressFinder);
+    final progressRotation = tester.widget<RotatedBox>(
+      find.ancestor(of: progressFinder, matching: find.byType(RotatedBox)),
+    );
     expect(title.style?.fontSize, greaterThan(artist.style?.fontSize ?? 0));
+    expect(progress.value, 0.25);
+    expect(progressRotation.quarterTurns, 2);
     expect(
       tester.getTopLeft(find.text('歌名')).dy,
       lessThan(tester.getTopLeft(find.text('作者')).dy),
     );
     final controlRect = tester.getRect(find.byType(AudioNowPlayingControl));
     final titleRect = tester.getRect(find.text('歌名'));
+    final progressRect = tester.getRect(progressFinder);
     final buttonRect = tester.getRect(find.byType(IconButton));
     expect(controlRect.width, 156);
     expect(titleRect.left, greaterThan(controlRect.left + 40));
-    expect(buttonRect.left - titleRect.right, 16);
-    expect(buttonRect.right, controlRect.right);
+    expect(progressRect.left - titleRect.right, 16);
+    expect(progressRect.right, controlRect.right);
+    expect(buttonRect.center.dx, closeTo(progressRect.center.dx, 0.01));
+    expect(buttonRect.center.dy, closeTo(progressRect.center.dy, 0.01));
 
     await tester.tap(find.byIcon(Icons.pause));
     expect(toggles, 1);
