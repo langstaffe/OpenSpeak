@@ -19,6 +19,9 @@ target_compile_definitions(openspeak_rnnoise PRIVATE
   "_CRT_SECURE_NO_WARNINGS"
   "_USE_MATH_DEFINES"
 )
+if(MSVC)
+  target_compile_options(openspeak_rnnoise PRIVATE /utf-8)
+endif()
 target_include_directories(openspeak_rnnoise
   PUBLIC "${RNNOISE_DIR}/include"
   PRIVATE "${RNNOISE_DIR}/src"
