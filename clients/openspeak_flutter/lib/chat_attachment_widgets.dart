@@ -98,8 +98,10 @@ class AudioNowPlayingControl extends StatelessWidget {
               snapshot.data ??
               AudioAttachmentMetadata(title: attachment.displayName);
           return Row(
+            mainAxisAlignment: MainAxisAlignment.end,
             children: [
-              Expanded(
+              Flexible(
+                fit: FlexFit.loose,
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   crossAxisAlignment: CrossAxisAlignment.start,

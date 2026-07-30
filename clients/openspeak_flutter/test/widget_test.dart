@@ -5758,7 +5758,12 @@ void main() {
       tester.getTopLeft(find.text('歌名')).dy,
       lessThan(tester.getTopLeft(find.text('作者')).dy),
     );
-    expect(tester.getSize(find.byType(AudioNowPlayingControl)).width, 156);
+    final controlRect = tester.getRect(find.byType(AudioNowPlayingControl));
+    final titleRect = tester.getRect(find.text('歌名'));
+    final buttonRect = tester.getRect(find.byType(IconButton));
+    expect(controlRect.width, 156);
+    expect(titleRect.left, greaterThan(controlRect.left + 40));
+    expect(buttonRect.right, controlRect.right);
 
     await tester.tap(find.byIcon(Icons.pause));
     expect(toggles, 1);
