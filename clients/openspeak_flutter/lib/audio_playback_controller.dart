@@ -118,6 +118,7 @@ class AudioPlaybackController extends ChangeNotifier {
   late final StreamSubscription<Duration> _durationSubscription;
   late final StreamSubscription<bool> _playingSubscription;
   late final StreamSubscription<void> _completeSubscription;
+  ChatAttachment? _selectedAttachment;
   String? _activeFileId;
   String? _loadingFileId;
   String? _activeProxyId;
@@ -127,6 +128,7 @@ class AudioPlaybackController extends ChangeNotifier {
   bool _playing = false;
   bool _disposed = false;
 
+  ChatAttachment? get selectedAttachment => _selectedAttachment;
   String? get activeFileId => _activeFileId;
   String? get loadingFileId => _loadingFileId;
   Duration get position => _position;
@@ -195,6 +197,7 @@ class AudioPlaybackController extends ChangeNotifier {
     await _audioPlayer.stop();
     if (_disposed) return;
     _change(() {
+      _selectedAttachment = attachment;
       _activeFileId = attachment.fileId;
       _loadingFileId = attachment.fileId;
       _playing = false;
@@ -245,6 +248,7 @@ class AudioPlaybackController extends ChangeNotifier {
 
     if (_activeFileId != null) _browserAudioPlayer.stop();
     _change(() {
+      _selectedAttachment = attachment;
       _activeFileId = attachment.fileId;
       _loadingFileId = attachment.fileId;
       _playing = false;
@@ -386,6 +390,7 @@ class AudioPlaybackController extends ChangeNotifier {
       await _audioPlayer.stop();
     }
     _change(() {
+      _selectedAttachment = null;
       _activeFileId = null;
       _loadingFileId = null;
       _playing = false;

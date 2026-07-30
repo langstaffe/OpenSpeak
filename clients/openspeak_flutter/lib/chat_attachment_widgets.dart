@@ -68,6 +68,95 @@ class _AudioSeekSliderState extends State<AudioSeekSlider> {
   }
 }
 
+class AudioNowPlayingControl extends StatelessWidget {
+  const AudioNowPlayingControl({
+    super.key,
+    required this.attachment,
+    required this.metadataFuture,
+    required this.loading,
+    required this.playing,
+    required this.compact,
+    required this.onToggle,
+  });
+
+  final ChatAttachment attachment;
+  final Future<AudioAttachmentMetadata> metadataFuture;
+  final bool loading;
+  final bool playing;
+  final bool compact;
+  final VoidCallback onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: compact ? 156 : 220,
+      height: 42,
+      child: FutureBuilder<AudioAttachmentMetadata>(
+        future: metadataFuture,
+        builder: (context, snapshot) {
+          final metadata =
+              snapshot.data ??
+              AudioAttachmentMetadata(title: attachment.displayName);
+          return Row(
+            children: [
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      metadata.title.trim().isEmpty
+                          ? attachment.displayName
+                          : metadata.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: OsColors.text,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      metadata.artist.trim().isEmpty
+                          ? '未知艺术家'
+                          : metadata.artist,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: OsColors.dim, fontSize: 11),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              IconButton.filled(
+                tooltip: playing ? '暂停' : '播放',
+                style: IconButton.styleFrom(
+                  fixedSize: const Size.square(36),
+                  minimumSize: const Size.square(36),
+                  padding: EdgeInsets.zero,
+                  backgroundColor: OsColors.blurple,
+                  foregroundColor: Colors.white,
+                ),
+                onPressed: loading ? null : onToggle,
+                icon: loading
+                    ? const SizedBox.square(
+                        dimension: 16,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : Icon(playing ? Icons.pause : Icons.play_arrow, size: 22),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
 class AudioAttachmentCard extends StatelessWidget {
   const AudioAttachmentCard({
     super.key,

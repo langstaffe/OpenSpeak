@@ -5720,6 +5720,50 @@ void main() {
     expect(seeks, 1);
   });
 
+  testWidgets('now playing control shows metadata and pauses from the header', (
+    tester,
+  ) async {
+    var toggles = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AudioNowPlayingControl(
+            attachment: ChatAttachment(
+              direct: false,
+              kind: 'file',
+              fileId: 'audio',
+              originalName: 'fallback.mp3',
+              contentType: 'audio/mpeg',
+              sizeBytes: 1024,
+              expiresAt: null,
+              expired: false,
+            ),
+            metadataFuture: Future.value(
+              const AudioAttachmentMetadata(title: '歌名', artist: '作者'),
+            ),
+            loading: false,
+            playing: true,
+            compact: true,
+            onToggle: () => toggles += 1,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final title = tester.widget<Text>(find.text('歌名'));
+    final artist = tester.widget<Text>(find.text('作者'));
+    expect(title.style?.fontSize, greaterThan(artist.style?.fontSize ?? 0));
+    expect(
+      tester.getTopLeft(find.text('歌名')).dy,
+      lessThan(tester.getTopLeft(find.text('作者')).dy),
+    );
+    expect(tester.getSize(find.byType(AudioNowPlayingControl)).width, 156);
+
+    await tester.tap(find.byIcon(Icons.pause));
+    expect(toggles, 1);
+  });
+
   test('stopped audio proxy reloads a newly cached source before resuming', () {
     expect(
       shouldReloadAudioSource(

@@ -1032,7 +1032,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       currentServerPermissions = <String>{};
       error = null;
     });
-    unawaited(audioPlayback.stop());
+    await audioPlayback.stop();
     attachmentCache.updateApi(null);
   }
 
@@ -6293,6 +6293,25 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     unawaited(navigator.maybePop());
   }
 
+  Widget buildAudioNowPlayingControl({required bool compact}) {
+    final attachment = audioPlayback.selectedAttachment;
+    if (attachment == null) return const SizedBox.shrink();
+    return Padding(
+      padding: EdgeInsets.only(left: compact ? 8 : 12),
+      child: AudioNowPlayingControl(
+        key: const ValueKey('audio-now-playing-control'),
+        attachment: attachment,
+        metadataFuture: loadAudioMetadata(attachment),
+        loading: audioPlayback.loadingFileId == attachment.fileId,
+        playing:
+            audioPlayback.activeFileId == attachment.fileId &&
+            audioPlayback.playing,
+        compact: compact,
+        onToggle: () => unawaited(toggleAudioAttachment(attachment)),
+      ),
+    );
+  }
+
   Widget buildMobileServerHeader() {
     final server = selectedServer;
     if (server == null) return const SizedBox.shrink();
@@ -6330,6 +6349,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
               ),
             ),
           ),
+          buildAudioNowPlayingControl(compact: true),
         ],
       ),
     );
@@ -7309,6 +7329,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
                     ),
                   ),
                 ),
+                buildAudioNowPlayingControl(compact: onBack != null),
               ],
             ),
           ),

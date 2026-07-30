@@ -47,6 +47,7 @@ void main() {
     expect(browserPlayer.unlocked, isTrue);
     expect(browserPlayer.streamStarts, 1);
     expect(rangeReads, 1);
+    expect(controller.selectedAttachment, same(attachment));
     expect(controller.activeFileId, 'song');
     expect(controller.loadingFileId, isNull);
     expect(controller.playing, isTrue);
@@ -65,10 +66,12 @@ void main() {
     expect(controller.playing, isTrue);
 
     browserPlayer.emitComplete();
+    expect(controller.selectedAttachment, same(attachment));
     expect(controller.playing, isFalse);
     expect(controller.position, const Duration(minutes: 3));
     await controller.stop();
     expect(browserPlayer.stops, 1);
+    expect(controller.selectedAttachment, isNull);
     expect(controller.activeFileId, isNull);
     expect(controller.position, Duration.zero);
     controller.dispose();
