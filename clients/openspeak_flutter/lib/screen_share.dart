@@ -168,14 +168,15 @@ rtc.StatsReport? selectedCandidatePairReport(
     final value = report.values['selectedCandidatePairId'];
     if (value is String && value.isNotEmpty) selectedPairId = value;
   }
+  rtc.StatsReport? legacySelectedPair;
   for (final report in reports) {
     if (report.type != 'candidate-pair') continue;
     if (selectedPairId != null && report.id == selectedPairId) return report;
-    if (selectedPairId == null && report.values['selected'] == true) {
-      return report;
+    if (legacySelectedPair == null && report.values['selected'] == true) {
+      legacySelectedPair = report;
     }
   }
-  return null;
+  return legacySelectedPair;
 }
 
 num? selectedCandidatePairValue(Iterable<rtc.StatsReport> reports, String key) {

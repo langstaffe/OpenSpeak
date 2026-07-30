@@ -66,6 +66,29 @@ double? sentPacketLossPercent({required num sent, required num lost}) =>
 double? receivedPacketLossPercent({required num received, required num lost}) =>
     _packetLossPercent(total: received + lost, lost: lost);
 
+({String streamId, num packetsSent, num packetsLost})?
+audioSenderPacketCounters(Iterable<rtc.StatsReport> reports) {
+  final samplesById = <String, rtc.StatsReport>{
+    for (final report in reports) report.id: report,
+  };
+  for (final outbound in samplesById.values) {
+    if (outbound.type != 'outbound-rtp') continue;
+    final packetsSent = outbound.values['packetsSent'];
+    final remoteId = outbound.values['remoteId'];
+    if (packetsSent is! num || remoteId is! String) continue;
+    final remoteInbound = samplesById[remoteId];
+    if (remoteInbound?.type != 'remote-inbound-rtp') continue;
+    final packetsLost = remoteInbound?.values['packetsLost'];
+    if (packetsLost is! num) continue;
+    return (
+      streamId: outbound.id,
+      packetsSent: packetsSent,
+      packetsLost: packetsLost,
+    );
+  }
+  return null;
+}
+
 ({double? mean, double? deviation}) latencySampleSummary(
   Iterable<double> values,
 ) {
@@ -2951,7 +2974,9 @@ class VoiceSessionController extends ChangeNotifier {
         for (final publication in localParticipant.audioTrackPublications) {
           final track = publication.track;
           if (track == null) continue;
-          final stats = await track.getSenderStats();
+          final sender = track.sender;
+          if (sender == null) continue;
+          final stats = audioSenderPacketCounters(await sender.getStats());
           if (!_networkStatsPollIsCurrent(room, revision)) return;
           final sent = stats?.packetsSent;
           final rawLost = stats?.packetsLost;

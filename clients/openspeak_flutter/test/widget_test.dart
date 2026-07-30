@@ -4313,6 +4313,31 @@ void main() {
     expect(receivedPacketLossPercent(received: 80, lost: 20), 20);
   });
 
+  test('audio sender loss comes from the related remote inbound report', () {
+    expect(
+      audioSenderPacketCounters([
+        rtc.StatsReport('outbound', 'outbound-rtp', 1, {
+          'packetsSent': 120,
+          'packetsLost': 99,
+          'remoteId': 'remote',
+        }),
+        rtc.StatsReport('remote', 'remote-inbound-rtp', 1, {'packetsLost': 3}),
+      ]),
+      (streamId: 'outbound', packetsSent: 120, packetsLost: 3),
+    );
+
+    expect(
+      audioSenderPacketCounters([
+        rtc.StatsReport('outbound', 'outbound-rtp', 1, {
+          'packetsSent': 10,
+          'packetsLost': 0,
+          'remoteId': 'remote',
+        }),
+      ]),
+      isNull,
+    );
+  });
+
   test('unchanged LiveKit room state does not refresh the voice snapshot', () {
     final snapshot = VoiceSessionSnapshot.initial().copyWith(
       remoteParticipants: 1,
@@ -4555,6 +4580,17 @@ void main() {
     ]);
 
     expect(pair?.id, 'current');
+  });
+
+  test('missing transport ICE pair falls back to the legacy selected flag', () {
+    final pair = selectedCandidatePairReport([
+      rtc.StatsReport('transport', 'transport', 1, {
+        'selectedCandidatePairId': 'missing',
+      }),
+      rtc.StatsReport('legacy', 'candidate-pair', 1, {'selected': true}),
+    ]);
+
+    expect(pair?.id, 'legacy');
   });
 
   test('ICE latency uses fresh responses and keeps the latest five', () {
