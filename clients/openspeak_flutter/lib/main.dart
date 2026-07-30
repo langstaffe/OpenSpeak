@@ -6317,7 +6317,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
     if (server == null) return const SizedBox.shrink();
     return Container(
       height: 58,
-      padding: const EdgeInsets.only(left: 14, right: 8),
+      padding: const EdgeInsets.only(left: 14, right: 16),
       decoration: const BoxDecoration(
         color: OsColors.sidebar,
         border: Border(bottom: BorderSide(color: OsColors.divider)),
