@@ -382,6 +382,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   PresenceSnapshot presence = PresenceSnapshot.empty();
   late final VoiceSessionController voiceSession;
   late final RealtimeConnectionController realtimeConnection;
+  Future<bool>? pendingRealtimeConnection;
   OsServer? selectedServer;
   Channel? selectedChannel;
   ChatScope chatScope = ChatScope.channel;
@@ -1482,15 +1483,29 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       myVoiceState = voiceStateForUser(initialState.presence, auth.user.id);
       selectedChannel = targetChannel;
     });
-    await restoreUnreadState(server.id, auth.user.id);
-    if (!isActiveConnectionGeneration(activeGeneration)) return;
-    final websocketConnected = await connectWebSocket(
-      client,
-      auth,
-      dev,
-      server,
-      expectedConnectionGeneration: activeGeneration,
-    );
+    final initialChannelJoinGeneration = hasServerPermission('voice.join')
+        ? channelJoinQueue.begin()
+        : null;
+    final pendingConnection = () async {
+      await restoreUnreadState(server.id, auth.user.id);
+      if (!isActiveConnectionGeneration(activeGeneration)) return false;
+      return connectWebSocket(
+        client,
+        auth,
+        dev,
+        server,
+        expectedConnectionGeneration: activeGeneration,
+      );
+    }();
+    pendingRealtimeConnection = pendingConnection;
+    late final bool websocketConnected;
+    try {
+      websocketConnected = await pendingConnection;
+    } finally {
+      if (identical(pendingRealtimeConnection, pendingConnection)) {
+        pendingRealtimeConnection = null;
+      }
+    }
     if (!websocketConnected) return;
     if (!isActiveConnectionGeneration(activeGeneration)) return;
     if (!hasServerPermission('voice.join') &&
@@ -1498,8 +1513,15 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       await client.accessChannel(auth.token, targetChannel.id);
       if (!isActiveConnectionGeneration(activeGeneration)) return;
     }
-    if (hasServerPermission('voice.join')) {
-      await joinChannelAsCurrentUser(targetChannel);
+    if (initialChannelJoinGeneration != null) {
+      final joinedLatest = await channelJoinQueue.run(
+        initialChannelJoinGeneration,
+        () async {
+          if (!isActiveConnectionGeneration(activeGeneration)) return;
+          await joinChannelAsCurrentUser(targetChannel);
+        },
+      );
+      if (!joinedLatest) return;
     }
     if (!isActiveConnectionGeneration(activeGeneration)) return;
     await refreshServerState(generation: activeGeneration);
@@ -1568,6 +1590,14 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
             if (!isActiveConnectionGeneration(activeConnectionGeneration)) {
               return;
             }
+            final pendingConnection = pendingRealtimeConnection;
+            if (!realtimeConnection.connected && pendingConnection != null) {
+              final connected = await pendingConnection;
+              if (!connected ||
+                  !isActiveConnectionGeneration(activeConnectionGeneration)) {
+                return;
+              }
+            }
             await voiceSession.isolatePersistentRoomForChannelSwitch();
             await joinChannelAsCurrentUser(channel);
           },
@@ -1577,7 +1607,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
             !isActiveConnectionGeneration(activeConnectionGeneration)) {
           return;
         }
-        switchVoice = voiceSession.isJoined;
+        switchVoice = true;
       }
       if (selectionGeneration != channelSelectionGeneration ||
           !isActiveConnectionGeneration(activeConnectionGeneration)) {
@@ -1594,7 +1624,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         });
         loadMessages = channelChanged;
       }
-      if (shouldJoin && !switchVoice) {
+      if (shouldJoin && !voiceSession.isJoined) {
         await refreshServerState();
       }
     });

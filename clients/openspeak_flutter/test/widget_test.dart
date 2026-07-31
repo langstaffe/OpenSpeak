@@ -1231,6 +1231,29 @@ void main() {
     expect(calls, ['first', 'second']);
   });
 
+  test('manual channel join supersedes a queued startup join', () async {
+    final queue = LatestChannelJoinQueue();
+    final realtimeReady = Completer<bool>();
+    final calls = <String>[];
+
+    final startupGeneration = queue.begin();
+    final manualGeneration = queue.begin();
+    final manual = queue.run(manualGeneration, () async {
+      expect(await realtimeReady.future, isTrue);
+      calls.add('manual');
+    });
+    final startup = queue.run(startupGeneration, () async {
+      calls.add('startup');
+    });
+
+    await Future<void>.delayed(Duration.zero);
+    expect(calls, isEmpty);
+    realtimeReady.complete(true);
+    expect(await manual, isTrue);
+    expect(await startup, isFalse);
+    expect(calls, ['manual']);
+  });
+
   test('realtime reconnect accepts Web and rejects stale desktop targets', () {
     expect(
       realtimeReconnectTargetIsCurrent(
