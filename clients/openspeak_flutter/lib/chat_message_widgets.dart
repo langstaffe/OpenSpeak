@@ -767,7 +767,7 @@ class ChatComposer extends StatefulWidget {
     super.key,
     required this.controller,
     required this.enabled,
-    this.readOnly = false,
+    this.sendEnabled = true,
     this.addEnabled,
     this.hintText,
     required this.disabledHintText,
@@ -779,7 +779,7 @@ class ChatComposer extends StatefulWidget {
 
   final TextEditingController controller;
   final bool enabled;
-  final bool readOnly;
+  final bool sendEnabled;
   final bool? addEnabled;
   final String? hintText;
   final String disabledHintText;
@@ -799,7 +799,7 @@ class _ChatComposerState extends State<ChatComposer> {
 
   bool get _canPasteImage =>
       widget.enabled &&
-      !widget.readOnly &&
+      widget.sendEnabled &&
       (widget.addEnabled ?? widget.enabled) &&
       widget.onPasteImage != null;
 
@@ -867,7 +867,6 @@ class _ChatComposerState extends State<ChatComposer> {
       focusNode: _focusNode,
       controller: widget.controller,
       enabled: widget.enabled,
-      readOnly: widget.readOnly,
       contextMenuBuilder: (context, editableTextState) =>
           osEditableTextContextMenuBuilder(
             context,
@@ -878,7 +877,7 @@ class _ChatComposerState extends State<ChatComposer> {
       maxLines: 4,
       textInputAction: TextInputAction.send,
       onEditingComplete: () {},
-      onSubmitted: widget.readOnly ? null : (_) => widget.onSend(),
+      onSubmitted: widget.sendEnabled ? (_) => widget.onSend() : null,
       decoration: InputDecoration(
         hintText: widget.enabled ? widget.hintText : widget.disabledHintText,
         filled: true,
@@ -908,7 +907,9 @@ class _ChatComposerState extends State<ChatComposer> {
         ),
         suffixIcon: IconButton(
           tooltip: '发送',
-          onPressed: widget.enabled && !widget.readOnly ? widget.onSend : null,
+          onPressed: widget.enabled && widget.sendEnabled
+              ? widget.onSend
+              : null,
           icon: const Icon(Icons.send, size: 20),
         ),
       ),

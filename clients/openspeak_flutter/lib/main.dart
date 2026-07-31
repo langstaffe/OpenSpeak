@@ -7390,7 +7390,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
           ChatComposer(
             controller: messageController,
             enabled: (channelEnabled || directEnabled) && canSendText,
-            readOnly: loading,
+            sendEnabled: !loading,
             addEnabled:
                 (channelEnabled || directEnabled) &&
                 !loading &&

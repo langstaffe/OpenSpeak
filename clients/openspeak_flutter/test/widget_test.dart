@@ -3119,7 +3119,9 @@ void main() {
     expect(state.loading, isFalse);
   });
 
-  testWidgets('chat composer keeps focus after sending', (tester) async {
+  testWidgets('chat composer stays editable while send is busy', (
+    tester,
+  ) async {
     final controller = TextEditingController();
     addTearDown(controller.dispose);
     final sent = <String>[];
@@ -3134,7 +3136,7 @@ void main() {
               return ChatComposer(
                 controller: controller,
                 enabled: true,
-                readOnly: sending,
+                sendEnabled: !sending,
                 disabledHintText: '',
                 onAdd: () {},
                 onSend: () {
@@ -3157,13 +3159,24 @@ void main() {
     final editable = tester.widget<EditableText>(find.byType(EditableText));
     expect(sent, ['first']);
     expect(editable.focusNode.hasFocus, isTrue);
-    rebuild(() => sending = false);
-    await tester.pump();
-    tester.testTextInput.enterText('second');
-    await tester.pump();
+    expect(editable.readOnly, isFalse);
+    await tester.enterText(find.byType(TextField), 'second');
     expect(controller.text, 'second');
     await tester.testTextInput.receiveAction(TextInputAction.send);
+    expect(sent, ['first']);
+    expect(controller.text, 'second');
+    rebuild(() => sending = false);
+    await tester.pump();
+    await tester.testTextInput.receiveAction(TextInputAction.send);
     expect(sent, ['first', 'second']);
+
+    await tester.pump();
+    await tester.enterText(find.byType(TextField), 'third');
+    expect(controller.text, 'third');
+    rebuild(() => sending = false);
+    await tester.pump();
+    await tester.testTextInput.receiveAction(TextInputAction.send);
+    expect(sent, ['first', 'second', 'third']);
   });
 
   testWidgets('chat composer recognizes a pasted desktop image', (
