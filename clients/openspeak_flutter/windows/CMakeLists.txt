@@ -59,7 +59,7 @@ include(flutter/generated_plugins.cmake)
 
 # flutter_webrtc 1.4.0 parses the audio constraints but discards them when it
 # creates the Windows audio source. Compile a local copy with OpenSpeak's fixed
-# AEC-on, AGC/NS/high-pass-off capture options until the dependency fixes it.
+# AEC/AGC-on, NS/high-pass-off capture options until the dependency fixes it.
 set(OPENSPEAK_WEBRTC_MEDIA_STREAM_SOURCE
   "${CMAKE_CURRENT_SOURCE_DIR}/flutter/ephemeral/.plugin_symlinks/flutter_webrtc/common/cpp/src/flutter_media_stream.cc")
 file(READ "${OPENSPEAK_WEBRTC_MEDIA_STREAM_SOURCE}"
@@ -72,7 +72,7 @@ set(OPENSPEAK_WEBRTC_CONFIGURED_AUDIO_SOURCE [[base_->factory_->CreateAudioSourc
             [] {
               libwebrtc::RTCAudioOptions options;
               options.echo_cancellation = true;
-              options.auto_gain_control = false;
+              options.auto_gain_control = true;
               options.noise_suppression = false;
               options.highpass_filter = false;
               return options;
@@ -89,11 +89,6 @@ foreach(OPENSPEAK_WEBRTC_OLD_VALUE IN ITEMS
 endforeach()
 string(REPLACE "${OPENSPEAK_WEBRTC_DEFAULT_AUDIO_SOURCE}"
   "${OPENSPEAK_WEBRTC_CONFIGURED_AUDIO_SOURCE}"
-  OPENSPEAK_WEBRTC_MEDIA_STREAM_CONTENT
-  "${OPENSPEAK_WEBRTC_MEDIA_STREAM_CONTENT}")
-string(REPLACE
-  [[settings[EncodableValue("autoGainControl")] = EncodableValue(true);]]
-  [[settings[EncodableValue("autoGainControl")] = EncodableValue(false);]]
   OPENSPEAK_WEBRTC_MEDIA_STREAM_CONTENT
   "${OPENSPEAK_WEBRTC_MEDIA_STREAM_CONTENT}")
 string(REPLACE

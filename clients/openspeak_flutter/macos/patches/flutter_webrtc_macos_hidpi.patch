@@ -105,8 +105,7 @@ diff --git a/macos/Classes/FlutterRTCMediaStream.m b/macos/Classes/FlutterRTCMed
    audioTrack.settings = @{
      @"deviceId" : audioDeviceId,
      @"kind" : @"audioinput",
--    @"autoGainControl" : @YES,
-+    @"autoGainControl" : @NO,
+     @"autoGainControl" : @YES,
      @"echoCancellation" : @YES,
 -    @"noiseSuppression" : @YES,
 +    @"noiseSuppression" : @NO,

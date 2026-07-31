@@ -2929,7 +2929,7 @@ void main() {
   });
 
   test(
-    'voice audio processing keeps only AEC in native capture constraints',
+    'voice audio processing keeps AEC and AGC in capture constraints',
     () {
       final enabled = voiceAudioCaptureOptions(
         noiseSuppressionEnabled: true,
@@ -2942,13 +2942,13 @@ void main() {
 
       expect(enabled.deviceId, 'microphone-1');
       expect(enabled.echoCancellation, isTrue);
-      expect(enabled.autoGainControl, isFalse);
+      expect(enabled.autoGainControl, isTrue);
       expect(enabled.noiseSuppression, kIsWeb);
       expect(enabled.highPassFilter, isFalse);
       expect(enabled.typingNoiseDetection, isFalse);
       expect(enabled.voiceIsolation, kIsWeb);
       expect(disabled.echoCancellation, isTrue);
-      expect(disabled.autoGainControl, isFalse);
+      expect(disabled.autoGainControl, isTrue);
       expect(disabled.noiseSuppression, kIsWeb);
       expect(disabled.highPassFilter, isFalse);
       expect(disabled.typingNoiseDetection, isFalse);

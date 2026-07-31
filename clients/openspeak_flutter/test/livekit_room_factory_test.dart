@@ -62,16 +62,16 @@ void main() {
         expect(enabled['deviceId'], isNotNull);
         expect(enabled['optional'], isNull);
         expect(enabled['echoCancellation'], isTrue);
-        expect(enabled['autoGainControl'], isFalse);
+        expect(enabled['autoGainControl'], isTrue);
         expect(enabled['noiseSuppression'], isTrue);
         expect(enabled['voiceIsolation'], isTrue);
         expect(disabled['echoCancellation'], isTrue);
-        expect(disabled['autoGainControl'], isFalse);
+        expect(disabled['autoGainControl'], isTrue);
         expect(disabled['noiseSuppression'], isTrue);
         expect(disabled['voiceIsolation'], isTrue);
         expect(systemDefault['optional'], isNull);
         expect(systemDefault['echoCancellation'], isTrue);
-        expect(systemDefault['autoGainControl'], isFalse);
+        expect(systemDefault['autoGainControl'], isTrue);
         expect(systemDefault['noiseSuppression'], isTrue);
         expect(systemDefault['voiceIsolation'], isTrue);
       } else {
@@ -88,7 +88,7 @@ void main() {
         };
         for (final constraints in [nativeEnabled, nativeDisabled]) {
           expect(constraints['googEchoCancellation'], isTrue);
-          expect(constraints['googAutoGainControl'], isFalse);
+          expect(constraints['googAutoGainControl'], isTrue);
           expect(constraints['googNoiseSuppression'], isFalse);
           expect(constraints['googHighpassFilter'], isFalse);
         }

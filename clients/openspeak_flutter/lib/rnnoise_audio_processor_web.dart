@@ -200,7 +200,7 @@ class _RnnoiseAudioProcessor
     if (track == null) return;
     final constraints = <String, dynamic>{
       'echoCancellation': true,
-      'autoGainControl': false,
+      'autoGainControl': true,
       'noiseSuppression': browserNoiseSuppression,
     };
     try {

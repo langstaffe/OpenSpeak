@@ -16,7 +16,7 @@ class _OpenSpeakAudioCaptureOptions extends lk.AudioCaptureOptions {
     super.deviceId,
   }) : super(
          echoCancellation: true,
-         autoGainControl: false,
+         autoGainControl: true,
          noiseSuppression: kIsWeb,
          highPassFilter: false,
          typingNoiseDetection: false,
