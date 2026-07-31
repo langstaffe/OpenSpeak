@@ -10,6 +10,9 @@ import 'client_log.dart';
 import 'livekit_room_factory.dart';
 import 'microphone_activation.dart';
 import 'openspeak_api.dart';
+import 'remote_audio_volume_native.dart'
+    if (dart.library.js_interop) 'remote_audio_volume_web.dart'
+    as remote_audio;
 import 'screen_share.dart';
 
 export 'microphone_activation.dart' show voiceAudioCaptureOptions;
@@ -2049,9 +2052,9 @@ class VoiceSessionController extends ChangeNotifier {
       for (final publication in participant.audioTrackPublications) {
         final track = publication.track;
         if (!publication.subscribed || track == null) continue;
-        await rtc.Helper.setVolume(
+        await remote_audio.setRemoteAudioTrackVolume(
+          track,
           effectiveParticipantOutputVolume(_outputVolume, next),
-          track.mediaStreamTrack,
         );
       }
     }
@@ -3682,7 +3685,7 @@ class VoiceSessionController extends ChangeNotifier {
             encryptionType: publication.encryptionType,
           )) {
         if (track != null) {
-          await rtc.Helper.setVolume(0, track.mediaStreamTrack);
+          await remote_audio.setRemoteAudioTrackVolume(track, 0);
           await track.disable();
         }
         await publication.unsubscribe();
@@ -3699,13 +3702,13 @@ class VoiceSessionController extends ChangeNotifier {
         final track = publication.track;
         if (track == null) return;
         await track.enable();
-        await rtc.Helper.setVolume(
+        await remote_audio.setRemoteAudioTrackVolume(
+          track,
           _effectiveVolumeForParticipant(publication.participant.identity),
-          track.mediaStreamTrack,
         );
       } else {
         if (track != null) {
-          await rtc.Helper.setVolume(0, track.mediaStreamTrack);
+          await remote_audio.setRemoteAudioTrackVolume(track, 0);
           await track.disable();
           await track.stop();
         }
@@ -3763,9 +3766,9 @@ class VoiceSessionController extends ChangeNotifier {
     for (final publication in _remoteAudioPublications(room)) {
       final track = publication.track;
       if (!publication.subscribed || track == null) continue;
-      await rtc.Helper.setVolume(
+      await remote_audio.setRemoteAudioTrackVolume(
+        track,
         _effectiveVolumeForParticipant(publication.participant.identity),
-        track.mediaStreamTrack,
       );
     }
   }

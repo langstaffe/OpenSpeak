@@ -8,6 +8,8 @@ import 'openspeak_api.dart';
 import 'os_avatar.dart';
 import 'os_theme.dart';
 
+const _channelDoubleTapTimeout = Duration(milliseconds: 500);
+
 class UnreadBadge extends StatelessWidget {
   const UnreadBadge({super.key, required this.count, this.compact = false});
 
@@ -667,7 +669,7 @@ class _ImmediateChannelInkWellState extends State<_ImmediateChannelInkWell> {
         kDoubleTapMinTime,
         () => tapSeriesMinTimeElapsed = true,
       );
-      tapSeriesTimer = Timer(kDoubleTapTimeout, clearTapSeries);
+      tapSeriesTimer = Timer(_channelDoubleTapTimeout, clearTapSeries);
     }
   }
 
@@ -701,6 +703,8 @@ class _ImmediateChannelInkWellState extends State<_ImmediateChannelInkWell> {
       child: InkWell(
         excludeFromSemantics: true,
         enableFeedback: false,
+        splashFactory: NoSplash.splashFactory,
+        highlightColor: Colors.transparent,
         onTap: handleTap,
         onTapCancel: handleTapCancel,
         onSecondaryTapDown: widget.onSecondaryTapDown,

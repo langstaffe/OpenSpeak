@@ -5211,7 +5211,7 @@ void main() {
       await tester.tap(channel);
       await tester.pump();
       final material = Material.of(tester.element(channel));
-      expect(material, paintsExactlyCountTimes(#drawCircle, 1));
+      expect(material, paintsExactlyCountTimes(#drawCircle, 0));
       expect(selections, 1);
       expect(joins, 0);
       await tester.pumpAndSettle();
@@ -5254,6 +5254,14 @@ void main() {
       await tester.pump();
       expect(selections, 9);
       expect(joins, 2);
+      await tester.pumpAndSettle();
+
+      await tester.tap(channel);
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.tap(channel);
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(selections, 11);
+      expect(joins, 3);
       await tester.pumpAndSettle();
     },
   );
