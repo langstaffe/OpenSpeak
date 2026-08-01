@@ -129,6 +129,14 @@ func newChannelTestEnv(t *testing.T, mode string) channelTestEnv {
 
 func TestVoiceAudioBitrateSetting(t *testing.T) {
 	env := newChannelTestEnv(t, "transport")
+	device, err := env.repo.RegisterDevice(context.Background(), store.Device{UserID: env.user.ID, Label: "listener"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpServer := httptest.NewServer(env.server)
+	defer httpServer.Close()
+	conn := dialTestWebSocket(t, httpServer.URL, env.token, device.ID, env.os.ID)
+	defer conn.Close()
 	if env.os.VoiceAudioBitrateKbps != 48 {
 		t.Fatalf("default bitrate = %d", env.os.VoiceAudioBitrateKbps)
 	}
@@ -161,6 +169,10 @@ func TestVoiceAudioBitrateSetting(t *testing.T) {
 	server, err := env.repo.GetServer(context.Background(), env.os.ID)
 	if err != nil || server.VoiceAudioBitrateKbps != 24 {
 		t.Fatalf("stored bitrate = %d, err = %v", server.VoiceAudioBitrateKbps, err)
+	}
+	event := readEventType(t, conn, "server.voice_audio_bitrate_changed")
+	if event.Payload["voice_audio_bitrate_kbps"] != float64(24) {
+		t.Fatalf("bitrate event = %#v", event.Payload)
 	}
 }
 

@@ -1668,6 +1668,15 @@ func (s *Server) handleServers(w http.ResponseWriter, r *http.Request, authCtx a
 				Payload: map[string]any{"encryption_mode": server.EncryptionMode},
 			})
 		}
+		if req.VoiceAudioBitrateKbps != nil {
+			s.hub.Publish(realtime.Event{
+				Type:     "server.voice_audio_bitrate_changed",
+				ServerID: parts[0],
+				Payload: map[string]any{
+					"voice_audio_bitrate_kbps": server.VoiceAudioBitrateKbps,
+				},
+			})
+		}
 		return
 	}
 

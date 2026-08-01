@@ -896,6 +896,22 @@ void main() {
     expect(web.red, isTrue);
   });
 
+  test('live voice bitrate updates current and future publishing state', () {
+    final parameters = rtc.RTCRtpParameters(
+      encodings: [rtc.RTCRtpEncoding(maxBitrate: 48000)],
+    );
+    expect(updateVoiceAudioEncodingBitrate(parameters.encodings, 24), isTrue);
+    expect(parameters.encodings!.single.maxBitrate, 24000);
+    expect(updateVoiceAudioEncodingBitrate(parameters.encodings, 72), isFalse);
+    expect(parameters.encodings!.single.maxBitrate, 24000);
+    expect(
+      VoiceToken.fromJson(const {
+        'voice_audio_bitrate_kbps': 48,
+      }).copyWith(voiceAudioBitrateKbps: 24).voiceAudioBitrateKbps,
+      24,
+    );
+  });
+
   test('stored Web auth sessions expire without storing the password', () {
     final expiresAt = DateTime.utc(2026, 7, 23, 12);
     final session = AuthSession(

@@ -55,6 +55,21 @@ lk.AudioPublishOptions voiceAudioPublishOptions(
   red: true,
 );
 
+bool updateVoiceAudioEncodingBitrate(
+  List<rtc.RTCRtpEncoding>? encodings,
+  int bitrateKbps,
+) {
+  if (!const {24, 32, 48, 64, 96}.contains(bitrateKbps) ||
+      encodings == null ||
+      encodings.isEmpty) {
+    return false;
+  }
+  for (final encoding in encodings) {
+    encoding.maxBitrate = bitrateKbps * 1000;
+  }
+  return true;
+}
+
 double? counterAverageDelta({
   required num? total,
   required num? previousTotal,
@@ -2075,6 +2090,49 @@ class VoiceSessionController extends ChangeNotifier {
     _setSnapshot(snapshot.copyWith(voiceToken: token));
   }
 
+  Future<void> setExternalVoiceAudioBitrateKbps(int bitrateKbps) async {
+    final token = snapshot.voiceToken;
+    if (token == null || !const {24, 32, 48, 64, 96}.contains(bitrateKbps)) {
+      return;
+    }
+    _setSnapshot(
+      snapshot.copyWith(
+        voiceToken: token.copyWith(voiceAudioBitrateKbps: bitrateKbps),
+      ),
+    );
+    await _enqueueMicrophoneOperation(() async {
+      final publication = _room?.localParticipant?.getTrackPublicationBySource(
+        lk.TrackSource.microphone,
+      );
+      if (publication?.track case final lk.LocalAudioTrack track) {
+        track.lastPublishOptions =
+            (track.lastPublishOptions ?? voiceAudioPublishOptions(bitrateKbps))
+                .copyWith(
+                  encoding: lk.AudioEncoding(maxBitrate: bitrateKbps * 1000),
+                );
+        final sender = track.sender;
+        if (sender == null) return;
+        final parameters = sender.parameters;
+        if (!updateVoiceAudioEncodingBitrate(
+          parameters.encodings,
+          bitrateKbps,
+        )) {
+          return;
+        }
+        try {
+          if (!await sender.setParameters(parameters)) {
+            ClientLog.write(
+              'voice.bitrate',
+              'sender rejected ${bitrateKbps}kbps',
+            );
+          }
+        } catch (error, stackTrace) {
+          ClientLog.error('voice.bitrate', error, stackTrace);
+        }
+      }
+    });
+  }
+
   Set<String> _e2eeParticipantIds(Iterable<String> userIds) => {
     for (final userId in userIds)
       if (userId.isNotEmpty) userId,
@@ -3238,7 +3296,12 @@ class VoiceSessionController extends ChangeNotifier {
       }
       track.mediaStreamTrack.enabled = false;
       try {
-        publication = await room.localParticipant?.publishAudioTrack(track);
+        publication = await room.localParticipant?.publishAudioTrack(
+          track,
+          publishOptions: voiceAudioPublishOptions(
+            snapshot.voiceToken?.voiceAudioBitrateKbps ?? 48,
+          ),
+        );
       } finally {
         publication = room.localParticipant?.getTrackPublicationBySource(
           lk.TrackSource.microphone,

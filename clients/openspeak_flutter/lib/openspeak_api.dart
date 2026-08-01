@@ -3409,6 +3409,7 @@ class VoiceToken {
 
   VoiceToken copyWith({
     String? channelId,
+    int? voiceAudioBitrateKbps,
     String? e2eeEpochId,
     int? e2eeKeyIndex,
     bool? e2eeKeyActive,
@@ -3423,7 +3424,7 @@ class VoiceToken {
     serverId: serverId,
     channelId: channelId ?? this.channelId,
     mediaNodeId: mediaNodeId,
-    voiceAudioBitrateKbps: voiceAudioBitrateKbps,
+    voiceAudioBitrateKbps: voiceAudioBitrateKbps ?? this.voiceAudioBitrateKbps,
     encryptionMode: encryptionMode,
     e2eeRequired: e2eeRequired,
     e2eeEpochId: e2eeEpochId ?? this.e2eeEpochId,

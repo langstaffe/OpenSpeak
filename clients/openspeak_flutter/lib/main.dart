@@ -2046,6 +2046,12 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       }
       return false;
     }
+    if (event.type == 'server.voice_audio_bitrate_changed') {
+      final bitrate = event.payload['voice_audio_bitrate_kbps'];
+      if (bitrate is num) {
+        await voiceSession.setExternalVoiceAudioBitrateKbps(bitrate.toInt());
+      }
+    }
     if (event.type.startsWith('voice.')) {
       applyRealtimeVoiceEvent(event);
     } else if (event.type.startsWith('user.') ||
@@ -5036,6 +5042,9 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
               screenShareBitrateLimits: screenShareBitrateLimits,
             );
           }
+          await voiceSession.setExternalVoiceAudioBitrateKbps(
+            updated.voiceAudioBitrateKbps,
+          );
           await applyScreenRelaySettings(
             transportClient,
             auth,
