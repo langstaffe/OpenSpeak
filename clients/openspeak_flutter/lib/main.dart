@@ -6780,13 +6780,12 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       1 => '网络较差',
       _ => '正在检测网络',
     };
-    final voiceStatus = !snapshot.connected
-        ? '未加入语音'
-        : snapshot.muted
-        ? '已静音'
-        : currentVoiceState?.speaking == true
-        ? '正在说话'
-        : '已连接';
+    final voiceStatus = mobileVoiceStatusLabel(
+      connected: snapshot.connected,
+      muted: snapshot.muted,
+      liveSpeaking: currentVoiceState?.speaking == true,
+      reportedSpeaking: snapshot.voiceState?.speaking == true,
+    );
 
     void refreshAfter(Future<void> action) {
       unawaited(
@@ -8074,6 +8073,17 @@ bool channelMemberIsSpeaking(
     currentRoomParticipantUserIds.contains(userId) &&
     (currentRoomSpeakingUserIds.contains(userId) ||
         (userId != localUserId && reportedSpeaking));
+
+String mobileVoiceStatusLabel({
+  required bool connected,
+  required bool muted,
+  required bool liveSpeaking,
+  required bool reportedSpeaking,
+}) {
+  if (!connected) return '未加入语音';
+  if (muted) return '已静音';
+  return liveSpeaking || reportedSpeaking ? '正在说话' : '已连接';
+}
 
 List<Channel> channelsAfterMove(
   List<Channel> channels,

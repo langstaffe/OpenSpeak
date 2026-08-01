@@ -2303,6 +2303,45 @@ void main() {
     );
   });
 
+  test('mobile voice status keeps speaking during the release delay', () {
+    expect(
+      mobileVoiceStatusLabel(
+        connected: true,
+        muted: false,
+        liveSpeaking: false,
+        reportedSpeaking: true,
+      ),
+      '正在说话',
+    );
+    expect(
+      mobileVoiceStatusLabel(
+        connected: true,
+        muted: false,
+        liveSpeaking: false,
+        reportedSpeaking: false,
+      ),
+      '已连接',
+    );
+    expect(
+      mobileVoiceStatusLabel(
+        connected: true,
+        muted: true,
+        liveSpeaking: true,
+        reportedSpeaking: true,
+      ),
+      '已静音',
+    );
+    expect(
+      mobileVoiceStatusLabel(
+        connected: false,
+        muted: false,
+        liveSpeaking: true,
+        reportedSpeaking: true,
+      ),
+      '未加入语音',
+    );
+  });
+
   test('system default audio labels fall back when names are unavailable', () {
     expect(
       systemDefaultAudioDeviceLabel(const [], 'audioinput', '系统默认麦克风'),
