@@ -3796,6 +3796,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
   }
 
   LinkPreview? fallbackLinkPreviewForBody(String body) {
+    if (kIsWeb) return null;
     final previewUrl = firstPreviewableUrl(body);
     return previewUrl == null ? null : fallbackLinkPreview(previewUrl);
   }
