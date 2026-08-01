@@ -129,15 +129,15 @@ func newChannelTestEnv(t *testing.T, mode string) channelTestEnv {
 
 func TestVoiceAudioBitrateSetting(t *testing.T) {
 	env := newChannelTestEnv(t, "transport")
-	if env.os.VoiceAudioBitrateKbps != 64 {
+	if env.os.VoiceAudioBitrateKbps != 48 {
 		t.Fatalf("default bitrate = %d", env.os.VoiceAudioBitrateKbps)
 	}
-	for _, value := range []int{32, 48, 64, 80, 96} {
+	for _, value := range []int{24, 32, 48, 64, 96} {
 		if !validVoiceAudioBitrate(value) {
 			t.Fatalf("valid bitrate rejected: %d", value)
 		}
 	}
-	for _, value := range []int{24, 72, 128} {
+	for _, value := range []int{16, 72, 80, 128} {
 		if validVoiceAudioBitrate(value) {
 			t.Fatalf("invalid bitrate accepted: %d", value)
 		}
@@ -151,7 +151,7 @@ func TestVoiceAudioBitrateSetting(t *testing.T) {
 		t.Fatalf("invalid status = %d, body = %s", invalidResponse.Code, invalidResponse.Body.String())
 	}
 
-	request := httptest.NewRequest(http.MethodPatch, "/api/v1/servers/"+env.os.ID+"/settings", strings.NewReader(`{"voice_audio_bitrate_kbps":96}`))
+	request := httptest.NewRequest(http.MethodPatch, "/api/v1/servers/"+env.os.ID+"/settings", strings.NewReader(`{"voice_audio_bitrate_kbps":24}`))
 	request.Header.Set("Authorization", "Bearer "+env.token)
 	response := httptest.NewRecorder()
 	env.server.ServeHTTP(response, request)
@@ -159,7 +159,7 @@ func TestVoiceAudioBitrateSetting(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
 	server, err := env.repo.GetServer(context.Background(), env.os.ID)
-	if err != nil || server.VoiceAudioBitrateKbps != 96 {
+	if err != nil || server.VoiceAudioBitrateKbps != 24 {
 		t.Fatalf("stored bitrate = %d, err = %v", server.VoiceAudioBitrateKbps, err)
 	}
 }

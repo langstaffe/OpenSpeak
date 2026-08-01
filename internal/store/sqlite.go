@@ -165,6 +165,9 @@ func (s *SQLite) CreateServer(ctx context.Context, server OSServer) (OSServer, e
 	if !server.ScreenShareBitrateLimits.Valid() {
 		server.ScreenShareBitrateLimits = DefaultScreenShareBitrateLimits()
 	}
+	if server.VoiceAudioBitrateKbps == 0 {
+		server.VoiceAudioBitrateKbps = 48
+	}
 	bitrateLimitsJSON, err := json.Marshal(server.ScreenShareBitrateLimits)
 	if err != nil {
 		return OSServer{}, err
@@ -173,14 +176,14 @@ func (s *SQLite) CreateServer(ctx context.Context, server OSServer) (OSServer, e
 	var policyText string
 	var bitrateLimitsText string
 	err = s.db.QueryRowContext(ctx, `
-		INSERT INTO os_servers (id, name, encryption_mode, file_root, history_retention_days, screen_share_policy_json, screen_share_bitrate_limits_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO os_servers (id, name, encryption_mode, file_root, history_retention_days, screen_share_policy_json, screen_share_bitrate_limits_json, voice_audio_bitrate_kbps)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		RETURNING id, name, avatar_version, avatar_hash, encryption_mode, file_root, history_retention_days,
 			server_password_hash != '', screen_share_policy_json, default_channel_id,
 			attachment_external_enabled, attachment_file_node_id, voice_audio_bitrate_kbps,
 			screen_share_bitrate_limits_json,
 			tls_certificate_type, tls_identifier, tls_status, tls_error, tls_expires_at, created_at
-	`, server.ID, server.Name, server.EncryptionMode, server.FileRoot, server.HistoryRetentionDays, string(policyJSON), string(bitrateLimitsJSON)).
+	`, server.ID, server.Name, server.EncryptionMode, server.FileRoot, server.HistoryRetentionDays, string(policyJSON), string(bitrateLimitsJSON), server.VoiceAudioBitrateKbps).
 		Scan(&server.ID, &server.Name, &server.AvatarVersion, &server.AvatarHash, &server.EncryptionMode, &server.FileRoot, &server.HistoryRetentionDays, &server.PasswordProtected, &policyText, &server.DefaultChannelID, &server.AttachmentExternalEnabled, &server.AttachmentFileNodeID, &server.VoiceAudioBitrateKbps, &bitrateLimitsText, &server.TLSCertificateType, &server.TLSIdentifier, &server.TLSStatus, &server.TLSError, &server.TLSExpiresAt, &createdAt)
 	if err != nil {
 		return OSServer{}, err

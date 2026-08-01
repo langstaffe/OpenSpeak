@@ -68,6 +68,34 @@ func TestMigrateClearsInterruptedTLSActivation(t *testing.T) {
 	}
 }
 
+func TestMigrateMapsLegacyHighVoiceBitrate(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "openspeak.db")
+	db, err := OpenSQLite(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO os_servers (id, name, file_root, voice_audio_bitrate_kbps) VALUES ('server', 'Server', '.', 80)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err = OpenSQLite(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var bitrate int
+	if err := db.QueryRowContext(ctx, `SELECT voice_audio_bitrate_kbps FROM os_servers WHERE id = 'server'`).Scan(&bitrate); err != nil {
+		t.Fatal(err)
+	}
+	if bitrate != 64 {
+		t.Fatalf("migrated bitrate = %d", bitrate)
+	}
+}
+
 func TestMigrateClearsPrototypeDeviceKeys(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "openspeak.db")

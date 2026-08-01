@@ -47,7 +47,7 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		{"os_servers", "default_channel_id", "ALTER TABLE os_servers ADD COLUMN default_channel_id TEXT REFERENCES channels(id) ON DELETE SET NULL"},
 		{"os_servers", "attachment_external_enabled", "ALTER TABLE os_servers ADD COLUMN attachment_external_enabled INTEGER NOT NULL DEFAULT 0"},
 		{"os_servers", "attachment_file_node_id", "ALTER TABLE os_servers ADD COLUMN attachment_file_node_id TEXT REFERENCES file_nodes(id) ON DELETE SET NULL"},
-		{"os_servers", "voice_audio_bitrate_kbps", "ALTER TABLE os_servers ADD COLUMN voice_audio_bitrate_kbps INTEGER NOT NULL DEFAULT 64"},
+		{"os_servers", "voice_audio_bitrate_kbps", "ALTER TABLE os_servers ADD COLUMN voice_audio_bitrate_kbps INTEGER NOT NULL DEFAULT 48"},
 		{"os_servers", "screen_share_bitrate_limits_json", "ALTER TABLE os_servers ADD COLUMN screen_share_bitrate_limits_json TEXT NOT NULL DEFAULT ''"},
 		{"os_servers", "message_retract_window_minutes", "ALTER TABLE os_servers ADD COLUMN message_retract_window_minutes INTEGER NOT NULL DEFAULT 30"},
 		{"os_servers", "tls_certificate_type", "ALTER TABLE os_servers ADD COLUMN tls_certificate_type TEXT NOT NULL DEFAULT ''"},
@@ -93,6 +93,9 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	if _, err := db.ExecContext(ctx, `UPDATE os_servers SET tls_status = 'error', tls_error = 'TLS 启用流程被服务器重启中断，请重新启用' WHERE tls_status = 'pending'`); err != nil {
+		return err
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE os_servers SET voice_audio_bitrate_kbps = 64 WHERE voice_audio_bitrate_kbps = 80`); err != nil {
 		return err
 	}
 	if _, err := db.ExecContext(ctx, `
@@ -178,7 +181,7 @@ CREATE TABLE IF NOT EXISTS os_servers (
 	default_channel_id TEXT REFERENCES channels(id) ON DELETE SET NULL,
 	attachment_external_enabled INTEGER NOT NULL DEFAULT 0,
 	attachment_file_node_id TEXT REFERENCES file_nodes(id) ON DELETE SET NULL,
-	voice_audio_bitrate_kbps INTEGER NOT NULL DEFAULT 64,
+	voice_audio_bitrate_kbps INTEGER NOT NULL DEFAULT 48,
 	screen_share_bitrate_limits_json TEXT NOT NULL DEFAULT '',
 	message_retract_window_minutes INTEGER NOT NULL DEFAULT 30,
 	tls_certificate_type TEXT NOT NULL DEFAULT '',

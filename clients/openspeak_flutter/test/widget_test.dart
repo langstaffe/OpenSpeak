@@ -3735,7 +3735,7 @@ void main() {
     expect(result?.defaultChannelId, 'channel');
     expect(result?.encryptionMode, 'e2ee');
     expect(result?.attachmentMode, 'local');
-    expect(result?.voiceAudioBitrateKbps, 64);
+    expect(result?.voiceAudioBitrateKbps, 48);
     expect(result?.screenShareBitrates[('720p', 30)], '4');
     expect(result?.webPath, 'chat');
   });
