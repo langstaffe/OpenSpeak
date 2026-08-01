@@ -8,8 +8,6 @@ import 'openspeak_api.dart';
 import 'os_avatar.dart';
 import 'os_theme.dart';
 
-const _channelDoubleTapTimeout = Duration(milliseconds: 500);
-
 class UnreadBadge extends StatelessWidget {
   const UnreadBadge({super.key, required this.count, this.compact = false});
 
@@ -612,7 +610,7 @@ class MobileVoiceActionCard extends StatelessWidget {
   }
 }
 
-class _ImmediateChannelInkWell extends StatefulWidget {
+class _ImmediateChannelInkWell extends StatelessWidget {
   const _ImmediateChannelInkWell({
     required this.onTap,
     required this.onDoubleTap,
@@ -625,79 +623,14 @@ class _ImmediateChannelInkWell extends StatefulWidget {
   final GestureTapDownCallback onSecondaryTapDown;
   final Widget child;
 
-  @override
-  State<_ImmediateChannelInkWell> createState() =>
-      _ImmediateChannelInkWellState();
-}
-
-class _ImmediateChannelInkWellState extends State<_ImmediateChannelInkWell> {
-  Offset? currentPrimaryDownPosition;
-  bool currentDoubleTapCandidate = false;
-  Offset? lastPrimaryDownPosition;
-  bool tapSeriesMinTimeElapsed = false;
-  Timer? tapSeriesMinTimer;
-  Timer? tapSeriesTimer;
-
   void handlePointerDown(PointerDownEvent event) {
-    if (event.buttons != kPrimaryButton) return;
-    widget.onTap();
-    currentPrimaryDownPosition = event.position;
-    currentDoubleTapCandidate = isDoubleTapCandidate(event.position);
-    if (currentDoubleTapCandidate) {
-      tapSeriesTimer?.cancel();
-      tapSeriesTimer = null;
-    }
-  }
-
-  bool isDoubleTapCandidate(Offset position) =>
-      lastPrimaryDownPosition != null &&
-      tapSeriesMinTimeElapsed &&
-      (position - lastPrimaryDownPosition!).distance <= kDoubleTapSlop;
-
-  void handleTap() {
-    final currentPosition = currentPrimaryDownPosition;
-    if (currentPosition == null) return;
-    final doubleTap = currentDoubleTapCandidate;
-    currentPrimaryDownPosition = null;
-    currentDoubleTapCandidate = false;
-    clearTapSeries();
-    if (doubleTap) {
-      widget.onDoubleTap();
-    } else {
-      lastPrimaryDownPosition = currentPosition;
-      tapSeriesMinTimer = Timer(
-        kDoubleTapMinTime,
-        () => tapSeriesMinTimeElapsed = true,
-      );
-      tapSeriesTimer = Timer(_channelDoubleTapTimeout, clearTapSeries);
-    }
-  }
-
-  void handleTapCancel() {
-    currentPrimaryDownPosition = null;
-    currentDoubleTapCandidate = false;
-    clearTapSeries();
-  }
-
-  void clearTapSeries() {
-    tapSeriesMinTimer?.cancel();
-    tapSeriesMinTimer = null;
-    tapSeriesTimer?.cancel();
-    tapSeriesTimer = null;
-    tapSeriesMinTimeElapsed = false;
-    lastPrimaryDownPosition = null;
-  }
-
-  @override
-  void dispose() {
-    clearTapSeries();
-    super.dispose();
+    if (event.buttons == kPrimaryButton) onTap();
   }
 
   @override
   Widget build(BuildContext context) => Semantics(
     button: true,
-    onTap: widget.onTap,
+    onTap: onTap,
     child: Listener(
       onPointerDown: handlePointerDown,
       child: InkWell(
@@ -705,10 +638,9 @@ class _ImmediateChannelInkWellState extends State<_ImmediateChannelInkWell> {
         enableFeedback: false,
         splashFactory: NoSplash.splashFactory,
         highlightColor: Colors.transparent,
-        onTap: handleTap,
-        onTapCancel: handleTapCancel,
-        onSecondaryTapDown: widget.onSecondaryTapDown,
-        child: widget.child,
+        onDoubleTap: onDoubleTap,
+        onSecondaryTapDown: onSecondaryTapDown,
+        child: child,
       ),
     ),
   );

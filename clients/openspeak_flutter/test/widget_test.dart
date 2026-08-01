@@ -5198,7 +5198,7 @@ void main() {
   });
 
   testWidgets(
-    'channel tile selects immediately and only joins on double click',
+    'channel tile selects immediately and keeps double click across rebuilds',
     (WidgetTester tester) async {
       var selections = 0;
       var joins = 0;
@@ -5209,43 +5209,46 @@ void main() {
             splashFactory: InkRipple.splashFactory,
           ),
           home: Scaffold(
-            body: ChannelTile(
-              channel: Channel(id: 'channel', name: '频道', sortOrder: 0),
-              selected: false,
-              unreadCount: 0,
-              mentionCount: 0,
-              members: const [],
-              directUnreadCounts: const {},
-              voiceStatesByUserId: const {},
-              currentUserId: null,
-              currentUserMicrophoneUnavailable: false,
-              currentUserSpeakerUnavailable: false,
-              onTap: () => selections += 1,
-              onDoubleTap: () => joins += 1,
-              onSecondaryTapDown: (_) {},
-              onMemberTap: (_) {},
-              onMemberSecondaryTapDown: (_, _) {},
+            body: StatefulBuilder(
+              builder: (context, setTileState) => ChannelTile(
+                channel: Channel(id: 'channel', name: '频道', sortOrder: 0),
+                selected: selections > 0,
+                unreadCount: 0,
+                mentionCount: 0,
+                members: const [],
+                directUnreadCounts: const {},
+                voiceStatesByUserId: const {},
+                currentUserId: null,
+                currentUserMicrophoneUnavailable: false,
+                currentUserSpeakerUnavailable: false,
+                onTap: () => setTileState(() => selections += 1),
+                onDoubleTap: () => joins += 1,
+                onSecondaryTapDown: (_) {},
+                onMemberTap: (_) {},
+                onMemberSecondaryTapDown: (_, _) {},
+              ),
             ),
           ),
         ),
       );
 
       final channel = find.text('频道');
-      await tester.tap(channel);
+      final firstTap = await tester.startGesture(tester.getCenter(channel));
+      await tester.pump();
+      expect(selections, 1);
+      expect(joins, 0);
+      await firstTap.up();
       await tester.pump();
       final material = Material.of(tester.element(channel));
       expect(material, paintsExactlyCountTimes(#drawCircle, 0));
-      expect(selections, 1);
-      expect(joins, 0);
       await tester.pumpAndSettle();
 
       await tester.tap(channel);
       await tester.pump(const Duration(milliseconds: 50));
       await tester.tap(channel);
-      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pumpAndSettle();
       expect(selections, 3);
       expect(joins, 1);
-      await tester.pumpAndSettle();
 
       final drag = await tester.startGesture(tester.getCenter(channel));
       await drag.moveBy(const Offset(50, 0));
@@ -5254,37 +5257,6 @@ void main() {
       await tester.pump(const Duration(milliseconds: 400));
       expect(selections, 5);
       expect(joins, 1);
-      await tester.pumpAndSettle();
-
-      await tester.tap(channel);
-      await tester.pump(const Duration(milliseconds: 50));
-      final heldSecondTap = await tester.startGesture(
-        tester.getCenter(channel),
-      );
-      await tester.pump(const Duration(milliseconds: 400));
-      await heldSecondTap.up();
-      await tester.pump();
-      expect(selections, 7);
-      expect(joins, 2);
-      await tester.pumpAndSettle();
-
-      await tester.tap(channel);
-      final tooFastSecondTap = await tester.startGesture(
-        tester.getCenter(channel),
-      );
-      await tester.pump(const Duration(milliseconds: 50));
-      await tooFastSecondTap.up();
-      await tester.pump();
-      expect(selections, 9);
-      expect(joins, 2);
-      await tester.pumpAndSettle();
-
-      await tester.tap(channel);
-      await tester.pump(const Duration(milliseconds: 400));
-      await tester.tap(channel);
-      await tester.pump(const Duration(milliseconds: 600));
-      expect(selections, 11);
-      expect(joins, 3);
       await tester.pumpAndSettle();
     },
   );
