@@ -426,11 +426,11 @@ class MicrophoneActivationCard extends StatelessWidget {
           ],
           MicrophoneActivationOption(
             selected: mode == MicrophoneActivationMode.continuous,
-            title: '持续传输',
-            subtitle: '进入语音且有其他参与者时持续传输',
+            title: '自动语音',
+            subtitle: '检测到声音时自动传输，无需按键',
             onTap: () => onModeChanged(MicrophoneActivationMode.continuous),
             expanded: mode == MicrophoneActivationMode.continuous
-                ? const ActivationHint(text: '只有进入语音且房间存在其他参与者时才会上传音频。')
+                ? const ActivationHint(text: '绿圈亮起且房间存在其他参与者时才会上传音频。')
                 : null,
           ),
           if (!kIsWeb) ...[

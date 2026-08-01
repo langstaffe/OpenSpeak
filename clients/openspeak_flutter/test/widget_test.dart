@@ -896,6 +896,14 @@ void main() {
     expect(web.red, isTrue);
   });
 
+  test('voice audio encoding pauses without unpublishing', () {
+    final encodings = [rtc.RTCRtpEncoding(), rtc.RTCRtpEncoding()];
+    expect(updateVoiceAudioEncodingActive(encodings, false), isTrue);
+    expect(encodings.every((encoding) => !encoding.active), isTrue);
+    expect(updateVoiceAudioEncodingActive(encodings, false), isFalse);
+    expect(updateVoiceAudioEncodingActive(null, false), isFalse);
+  });
+
   test('live voice bitrate updates current and future publishing state', () {
     final parameters = rtc.RTCRtpParameters(
       encodings: [rtc.RTCRtpEncoding(maxBitrate: 48000)],
@@ -1702,30 +1710,6 @@ void main() {
     expect(state.mediaKeySlots, isTrue);
   });
 
-  test('hotplug restarts the published capture only at the send gate', () {
-    expect(
-      microphoneCaptureRestartShouldRun(
-        restartPending: true,
-        shouldTransmit: false,
-      ),
-      isFalse,
-    );
-    expect(
-      microphoneCaptureRestartShouldRun(
-        restartPending: true,
-        shouldTransmit: true,
-      ),
-      isTrue,
-    );
-    expect(
-      microphoneCaptureRestartShouldRun(
-        restartPending: false,
-        shouldTransmit: true,
-      ),
-      isFalse,
-    );
-  });
-
   test('hotplug detaches the published sender only on Windows', () {
     expect(
       microphoneCaptureRestartShouldDetachSender(TargetPlatform.windows),
@@ -1880,6 +1864,50 @@ void main() {
     expect(microphoneThresholdLabel(0), '-50 dB');
     expect(microphoneThresholdLabel(0.75), '+25 dB');
     expect(microphoneThresholdRms(0), lessThan(microphoneThresholdRms(1)));
+  });
+
+  test('all microphone modes require detected activity', () {
+    for (final mode in const [
+      MicrophoneActivationMode.pushToTalk,
+      MicrophoneActivationMode.continuous,
+    ]) {
+      expect(
+        microphoneActivityDetected(
+          mode: mode,
+          inputActive: false,
+          rms: 1,
+          threshold: 0.4,
+        ),
+        isFalse,
+      );
+      expect(
+        microphoneActivityDetected(
+          mode: mode,
+          inputActive: true,
+          rms: 0,
+          threshold: 0.4,
+        ),
+        isTrue,
+      );
+    }
+    expect(
+      microphoneActivityDetected(
+        mode: MicrophoneActivationMode.voiceThreshold,
+        inputActive: true,
+        rms: microphoneThresholdRms(0.4) / 2,
+        threshold: 0.4,
+      ),
+      isFalse,
+    );
+    expect(
+      microphoneActivityDetected(
+        mode: MicrophoneActivationMode.voiceThreshold,
+        inputActive: false,
+        rms: microphoneThresholdRms(0.4),
+        threshold: 0.4,
+      ),
+      isTrue,
+    );
   });
 
   test(
@@ -2210,32 +2238,40 @@ void main() {
     );
   });
 
-  test(
-    'microphone transmission requires activation and another participant',
-    () {
-      expect(
-        microphoneAudioShouldTransmit(
-          activationOpen: true,
-          hasRemoteParticipants: false,
-        ),
-        isFalse,
-      );
-      expect(
-        microphoneAudioShouldTransmit(
-          activationOpen: false,
-          hasRemoteParticipants: true,
-        ),
-        isFalse,
-      );
-      expect(
-        microphoneAudioShouldTransmit(
-          activationOpen: true,
-          hasRemoteParticipants: true,
-        ),
-        isTrue,
-      );
-    },
-  );
+  test('microphone transmission requires voice and another participant', () {
+    expect(
+      microphoneAudioShouldTransmit(
+        activationOpen: true,
+        voiceActive: true,
+        hasRemoteParticipants: false,
+      ),
+      isFalse,
+    );
+    expect(
+      microphoneAudioShouldTransmit(
+        activationOpen: false,
+        voiceActive: true,
+        hasRemoteParticipants: true,
+      ),
+      isFalse,
+    );
+    expect(
+      microphoneAudioShouldTransmit(
+        activationOpen: true,
+        voiceActive: false,
+        hasRemoteParticipants: true,
+      ),
+      isFalse,
+    );
+    expect(
+      microphoneAudioShouldTransmit(
+        activationOpen: true,
+        voiceActive: true,
+        hasRemoteParticipants: true,
+      ),
+      isTrue,
+    );
+  });
 
   test(
     'local speaking state updates the avatar without a remote participant',
@@ -2431,7 +2467,7 @@ void main() {
 
     expect(find.text('麦克风激活方式'), findsOneWidget);
     expect(find.text('按键通话'), kIsWeb ? findsNothing : findsOneWidget);
-    expect(find.text('持续传输'), findsOneWidget);
+    expect(find.text('自动语音'), findsOneWidget);
     expect(find.text('语音阈值'), kIsWeb ? findsNothing : findsOneWidget);
     expect(find.textContaining('房间存在其他参与者'), findsOneWidget);
     expect(find.text('音效'), findsOneWidget);

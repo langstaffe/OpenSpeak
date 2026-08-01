@@ -21,7 +21,7 @@ const _minimumVoiceAudioRms = 0.0008;
 const _minimumWindowsVoiceAudioRms = 0.0001;
 const _noiseFloorMultiplier = 1.8;
 const _windowsWebRtcLevelIdleDelay = Duration(milliseconds: 120);
-const _microphoneThresholdReleaseDelay = Duration(milliseconds: 250);
+const _microphoneActivityReleaseDelay = Duration(milliseconds: 250);
 const _latencySampleWindowSize = 5;
 const _nativeAudioProcessingChannel = OptionalMethodChannel(
   'openspeak/audio_processing',
@@ -68,6 +68,20 @@ bool updateVoiceAudioEncodingBitrate(
     encoding.maxBitrate = bitrateKbps * 1000;
   }
   return true;
+}
+
+bool updateVoiceAudioEncodingActive(
+  List<rtc.RTCRtpEncoding>? encodings,
+  bool active,
+) {
+  if (encodings == null || encodings.isEmpty) return false;
+  var changed = false;
+  for (final encoding in encodings) {
+    if (encoding.active == active) continue;
+    encoding.active = active;
+    changed = true;
+  }
+  return changed;
 }
 
 double? counterAverageDelta({
@@ -259,10 +273,21 @@ bool microphoneActivationGateOpen({
   MicrophoneActivationMode.voiceThreshold => thresholdOpen,
 };
 
+bool microphoneActivityDetected({
+  required MicrophoneActivationMode mode,
+  required bool inputActive,
+  required double rms,
+  required double threshold,
+}) =>
+    mode == MicrophoneActivationMode.voiceThreshold
+    ? rms >= microphoneThresholdRms(threshold)
+    : inputActive;
+
 bool microphoneAudioShouldTransmit({
   required bool activationOpen,
+  required bool voiceActive,
   required bool hasRemoteParticipants,
-}) => activationOpen && hasRemoteParticipants;
+}) => activationOpen && voiceActive && hasRemoteParticipants;
 
 bool microphoneSenderRoutingAllowed({
   required bool reconnecting,
@@ -316,11 +341,6 @@ Future<void> switchVoiceChannelWithReconnectFallback({
     await reconnect(error, stackTrace);
   }
 }
-
-bool microphoneCaptureRestartShouldRun({
-  required bool restartPending,
-  required bool shouldTransmit,
-}) => restartPending && shouldTransmit;
 
 bool microphoneCaptureRestartShouldDetachSender(
   TargetPlatform platform, {
@@ -736,9 +756,9 @@ class VoiceSessionController extends ChangeNotifier {
       MicrophoneActivationMode.continuous;
   double _microphoneThreshold = 0.4;
   bool _pushToTalkPressed = false;
-  bool _thresholdGateOpen = false;
-  DateTime? _thresholdReleaseAt;
-  Timer? _thresholdGateReleaseTimer;
+  bool _microphoneActivityGateOpen = false;
+  DateTime? _microphoneActivityReleaseAt;
+  Timer? _microphoneActivityGateReleaseTimer;
   bool _microphoneGateOpen = false;
   double _outputVolume = 1.0;
   final Map<String, double> _participantOutputVolumes = {};
@@ -2004,12 +2024,6 @@ class VoiceSessionController extends ChangeNotifier {
   }) async {
     _microphoneActivationMode = mode;
     _microphoneThreshold = threshold.clamp(0.0, 1.0).toDouble();
-    if (mode != MicrophoneActivationMode.voiceThreshold) {
-      _thresholdGateReleaseTimer?.cancel();
-      _thresholdGateReleaseTimer = null;
-      _thresholdGateOpen = false;
-      _thresholdReleaseAt = null;
-    }
     await _applyMicrophonePublishing();
   }
 
@@ -2817,58 +2831,56 @@ class VoiceSessionController extends ChangeNotifier {
     _refreshRoomSnapshot();
   }
 
-  Future<void> _updateMicrophoneThresholdGate(double rms) async {
-    if (_microphoneActivationMode != MicrophoneActivationMode.voiceThreshold) {
-      return;
-    }
+  Future<void> _updateMicrophoneActivityGate(double rms) async {
     final now = DateTime.now();
-    final above = rms >= microphoneThresholdRms(_microphoneThreshold);
+    final above = microphoneActivityDetected(
+      mode: _microphoneActivationMode,
+      inputActive: _localAudioActive,
+      rms: rms,
+      threshold: _microphoneThreshold,
+    );
     if (above) {
-      _thresholdReleaseAt = now.add(_microphoneThresholdReleaseDelay);
-      _scheduleThresholdGateRelease();
-      if (_thresholdGateOpen) return;
-      _thresholdGateOpen = true;
+      _microphoneActivityReleaseAt = now.add(_microphoneActivityReleaseDelay);
+      _scheduleMicrophoneActivityGateRelease();
+      if (_microphoneActivityGateOpen) return;
+      _microphoneActivityGateOpen = true;
       await _applyMicrophonePublishing();
       return;
     }
 
-    final releaseAt = _thresholdReleaseAt;
+    final releaseAt = _microphoneActivityReleaseAt;
     if (releaseAt != null && now.isBefore(releaseAt)) return;
-    await _closeMicrophoneThresholdGate();
+    await _closeMicrophoneActivityGate();
   }
 
-  void _scheduleThresholdGateRelease() {
-    _thresholdGateReleaseTimer?.cancel();
-    final releaseAt = _thresholdReleaseAt;
+  void _scheduleMicrophoneActivityGateRelease() {
+    _microphoneActivityGateReleaseTimer?.cancel();
+    final releaseAt = _microphoneActivityReleaseAt;
     if (releaseAt == null) return;
     final delay = releaseAt.difference(DateTime.now());
-    _thresholdGateReleaseTimer = Timer(
+    _microphoneActivityGateReleaseTimer = Timer(
       delay.isNegative ? Duration.zero : delay,
-      () => unawaited(_closeMicrophoneThresholdGateIfDue()),
+      () => unawaited(_closeMicrophoneActivityGateIfDue()),
     );
   }
 
-  Future<void> _closeMicrophoneThresholdGateIfDue() async {
-    if (_disposed ||
-        _microphoneActivationMode != MicrophoneActivationMode.voiceThreshold) {
-      return;
-    }
-    final releaseAt = _thresholdReleaseAt;
+  Future<void> _closeMicrophoneActivityGateIfDue() async {
+    if (_disposed) return;
+    final releaseAt = _microphoneActivityReleaseAt;
     if (releaseAt != null && DateTime.now().isBefore(releaseAt)) {
-      _scheduleThresholdGateRelease();
+      _scheduleMicrophoneActivityGateRelease();
       return;
     }
-    await _closeMicrophoneThresholdGate();
+    await _closeMicrophoneActivityGate();
   }
 
-  Future<void> _closeMicrophoneThresholdGate() async {
-    _thresholdGateReleaseTimer?.cancel();
-    _thresholdGateReleaseTimer = null;
-    _thresholdReleaseAt = null;
-    if (!_thresholdGateOpen) return;
-    _thresholdGateOpen = false;
+  Future<void> _closeMicrophoneActivityGate() async {
+    _microphoneActivityGateReleaseTimer?.cancel();
+    _microphoneActivityGateReleaseTimer = null;
+    _microphoneActivityReleaseAt = null;
+    if (!_microphoneActivityGateOpen) return;
+    _microphoneActivityGateOpen = false;
     await _applyMicrophonePublishing();
-    _setLocalSpeaking(false);
   }
 
   void _startAudioStatsPoll() {
@@ -3238,25 +3250,28 @@ class VoiceSessionController extends ChangeNotifier {
         microphoneActivationGateOpen(
           mode: _microphoneActivationMode,
           pushToTalkPressed: _pushToTalkPressed,
-          thresholdOpen: _thresholdGateOpen,
+          thresholdOpen: _microphoneActivityGateOpen,
         );
   }
 
   bool _shouldReportSpeaking() {
     final room = _room;
-    return room != null && _microphoneGateOpen && _shouldOpenMicrophoneGate();
+    return room != null &&
+        _microphoneGateOpen &&
+        _microphoneActivityGateOpen &&
+        _shouldOpenMicrophoneGate();
   }
 
   Future<void> _applyMicrophonePublishing() {
     _microphoneRoutingRevision += 1;
     final shouldOpenGate = _room != null && _shouldOpenMicrophoneGate();
     _microphoneGateOpen = shouldOpenGate;
-    if (!shouldOpenGate) {
+    if (!_shouldKeepMicrophoneTrack()) {
       _localAudioActive = false;
       microphoneInputActive.value = false;
-      if (!_shouldKeepMicrophoneTrack()) microphoneInputLevel.value = 0;
-      _setLocalSpeaking(false);
+      microphoneInputLevel.value = 0;
     }
+    _setLocalSpeaking(_microphoneActivityGateOpen);
     return _enqueueMicrophoneOperation(_applyMicrophonePublishingOnce);
   }
 
@@ -3316,6 +3331,7 @@ class VoiceSessionController extends ChangeNotifier {
                 shouldTransmit: shouldTransmit,
               ),
             );
+            await _setMicrophoneSenderActive(publishedTrack, shouldTransmit);
           }
         } finally {
           track.mediaStreamTrack.enabled = true;
@@ -3338,10 +3354,7 @@ class VoiceSessionController extends ChangeNotifier {
     } else if (publication?.track
         case final lk.LocalAudioTrack publishedTrack) {
       var forceSenderAttach = false;
-      if (microphoneCaptureRestartShouldRun(
-        restartPending: _microphoneCaptureRestartPending,
-        shouldTransmit: _shouldTransmitMicrophone(room),
-      )) {
+      if (_microphoneCaptureRestartPending) {
         forceSenderAttach = microphoneCaptureRestartShouldDetachSender(
           defaultTargetPlatform,
           isWeb: kIsWeb,
@@ -3361,7 +3374,7 @@ class VoiceSessionController extends ChangeNotifier {
       }
       // LiveKit disposes the track when a publication is removed, even with
       // stopLocalTrackOnUnpublish disabled. Keep the publication and detach
-      // only its sender so local PCM monitoring survives while alone.
+      // only its sender so local PCM monitoring survives while audio is gated.
       while (true) {
         final revision = _microphoneRoutingRevision;
         shouldTransmit = _shouldTransmitMicrophone(room);
@@ -3380,6 +3393,7 @@ class VoiceSessionController extends ChangeNotifier {
           await _microphoneSenderTrack(track, shouldTransmit: shouldTransmit),
           force: forceSenderAttach && shouldTransmit,
         );
+        await _setMicrophoneSenderActive(publishedTrack, shouldTransmit);
         forceSenderAttach = false;
         await _syncMicrophoneMonitor(
           track,
@@ -3443,6 +3457,7 @@ class VoiceSessionController extends ChangeNotifier {
         encryptionAccepted &&
         microphoneAudioShouldTransmit(
           activationOpen: _shouldOpenMicrophoneGate(),
+          voiceActive: _microphoneActivityGateOpen,
           hasRemoteParticipants: _currentChannelRemoteParticipants(
             room,
           ).isNotEmpty,
@@ -3479,6 +3494,31 @@ class VoiceSessionController extends ChangeNotifier {
     }
     senderTrack.enabled = shouldTransmit;
     return senderTrack;
+  }
+
+  Future<void> _setMicrophoneSenderActive(
+    lk.LocalAudioTrack track,
+    bool active,
+  ) async {
+    if (!kIsWeb) return;
+    final room = _room;
+    final sender = track.sender;
+    if (room == null || sender == null || !_canRouteMicrophoneSender(room)) {
+      return;
+    }
+    final parameters = sender.parameters;
+    if (!updateVoiceAudioEncodingActive(parameters.encodings, active)) return;
+    ClientLog.write(
+      'voice.mic',
+      'sender encoding ${active ? 'resume' : 'pause'} start',
+    );
+    if (!await sender.setParameters(parameters)) {
+      throw StateError('Web microphone sender rejected encoding state');
+    }
+    ClientLog.write(
+      'voice.mic',
+      'sender encoding ${active ? 'resume' : 'pause'} done',
+    );
   }
 
   Future<void> _replaceMicrophoneSenderTrack(
@@ -3616,13 +3656,7 @@ class VoiceSessionController extends ChangeNotifier {
         ? _windowsActivityDetector.update(rms)
         : microphoneRmsIndicatesActivity(rms);
     microphoneInputActive.value = _localAudioActive;
-    unawaited(_updateMicrophoneThresholdGate(rms));
-    _setLocalSpeaking(switch (_microphoneActivationMode) {
-      MicrophoneActivationMode.pushToTalk =>
-        _pushToTalkPressed && _localAudioActive,
-      MicrophoneActivationMode.continuous => _localAudioActive,
-      MicrophoneActivationMode.voiceThreshold => _thresholdGateOpen,
-    });
+    unawaited(_updateMicrophoneActivityGate(rms));
   }
 
   Future<void> _releaseMicrophoneMonitor() async {
@@ -3680,7 +3714,7 @@ class VoiceSessionController extends ChangeNotifier {
         }
         _microphoneCaptureTrack = publishedTrack;
         _microphoneCaptureRestartPending = true;
-        ClientLog.write('voice.mic', 'reset deferred to send gate');
+        ClientLog.write('voice.mic', 'reset queued');
         return;
       }
       _microphoneCaptureRestartPending = false;
@@ -3978,10 +4012,10 @@ class VoiceSessionController extends ChangeNotifier {
     ]);
     _microphoneCaptureRestartPending = false;
     _microphoneGateOpen = false;
-    _thresholdGateReleaseTimer?.cancel();
-    _thresholdGateReleaseTimer = null;
-    _thresholdGateOpen = false;
-    _thresholdReleaseAt = null;
+    _microphoneActivityGateReleaseTimer?.cancel();
+    _microphoneActivityGateReleaseTimer = null;
+    _microphoneActivityGateOpen = false;
+    _microphoneActivityReleaseAt = null;
     microphoneInputLevel.value = 0;
     microphoneInputActive.value = false;
     final listener = _roomListener;
@@ -4044,7 +4078,7 @@ class VoiceSessionController extends ChangeNotifier {
     _cancelLiveKitReconnect(resetAttempts: true);
     _speakingSyncTimer?.cancel();
     _audioStatsTimer?.cancel();
-    _thresholdGateReleaseTimer?.cancel();
+    _microphoneActivityGateReleaseTimer?.cancel();
     _windowsMicrophoneLevelIdleTimer?.cancel();
     _e2eeOldKeyRetireTimer?.cancel();
     _clearE2EEKey();
