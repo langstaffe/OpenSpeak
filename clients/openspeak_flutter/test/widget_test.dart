@@ -76,6 +76,11 @@ void main() {
     expect(entry, contains('onerror='));
     expect(bootstrap, contains('onEntrypointLoaded: async'));
     expect(bootstrap, contains('initializeEngine(flutterConfig)'));
+    expect(
+      bootstrap,
+      contains('const assetBase = __OPENSPEAK_WEB_ASSET_BASE__;'),
+    );
+    expect(bootstrap, contains('assetBase,'));
     for (var stage = 1; stage <= 4; stage += 1) {
       expect(bootstrap, contains('setLoadingProgress($stage,'));
     }
