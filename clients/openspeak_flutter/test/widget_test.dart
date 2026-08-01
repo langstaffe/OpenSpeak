@@ -4087,25 +4087,36 @@ void main() {
   testWidgets('shows compact mic volume popover on hover', (
     WidgetTester tester,
   ) async {
+    var inputVolume = 0.8;
+    var outputVolume = 0.6;
     double? changedInputVolume;
+    double? changedOutputVolume;
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
           body: Align(
             alignment: Alignment.bottomLeft,
-            child: CurrentUserBar(
-              connected: true,
-              displayName: 'Admin',
-              online: true,
-              muted: false,
-              listenOff: false,
-              inputVolume: 0.8,
-              outputVolume: 0.6,
-              onMute: () {},
-              onListenOff: () {},
-              onInputVolumeChanged: (value) => changedInputVolume = value,
-              onOutputVolumeChanged: (_) {},
-              onSettings: () {},
+            child: StatefulBuilder(
+              builder: (context, setBarState) => CurrentUserBar(
+                connected: true,
+                displayName: 'Admin',
+                online: true,
+                muted: false,
+                listenOff: false,
+                inputVolume: inputVolume,
+                outputVolume: outputVolume,
+                onMute: () {},
+                onListenOff: () {},
+                onInputVolumeChanged: (value) {
+                  changedInputVolume = value;
+                  setBarState(() => inputVolume = value);
+                },
+                onOutputVolumeChanged: (value) {
+                  changedOutputVolume = value;
+                  setBarState(() => outputVolume = value);
+                },
+                onSettings: () {},
+              ),
             ),
           ),
         ),
@@ -4133,12 +4144,29 @@ void main() {
       3,
     );
     tester.widget<Slider>(slider).onChanged!(0.35);
+    await tester.pump();
     expect(changedInputVolume, 0.35);
+    expect(tester.widget<Slider>(slider).value, 0.35);
+    await tester.pump();
     final sliderRect = tester.getRect(slider);
     await tester.tapAt(Offset(sliderRect.center.dx, sliderRect.top + 22));
+    await tester.pump();
     expect(changedInputVolume, greaterThan(0.9));
+    expect(tester.widget<Slider>(slider).value, greaterThan(0.9));
+    await tester.pump();
     await tester.tapAt(Offset(sliderRect.center.dx, sliderRect.bottom - 22));
+    await tester.pump();
     expect(changedInputVolume, lessThan(0.1));
+    expect(tester.widget<Slider>(slider).value, lessThan(0.1));
+    await tester.pump();
+
+    await gesture.moveTo(tester.getCenter(find.byIcon(Icons.volume_up)));
+    await tester.pump();
+    expect(tester.widget<Slider>(slider).value, 0.6);
+    tester.widget<Slider>(slider).onChanged!(0.4);
+    await tester.pump();
+    expect(changedOutputVolume, 0.4);
+    expect(tester.widget<Slider>(slider).value, 0.4);
     await gesture.removePointer();
     await tester.pump(const Duration(milliseconds: 300));
   });

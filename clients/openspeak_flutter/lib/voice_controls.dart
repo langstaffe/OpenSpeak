@@ -104,7 +104,12 @@ class _CurrentUserBarState extends State<CurrentUserBar> {
             oldWidget.outputVolume != widget.outputVolume ||
             oldWidget.muted != widget.muted ||
             oldWidget.listenOff != widget.listenOff)) {
-      _volumeOverlay?.markNeedsBuild();
+      final overlay = _volumeOverlay;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && identical(_volumeOverlay, overlay)) {
+          overlay?.markNeedsBuild();
+        }
+      });
     }
     if (oldWidget.canSpeak &&
         !widget.canSpeak &&
@@ -1410,7 +1415,7 @@ class AudioVolumePopover extends StatelessWidget {
   }
 }
 
-class VerticalVolumeSlider extends StatelessWidget {
+class VerticalVolumeSlider extends StatefulWidget {
   const VerticalVolumeSlider({
     super.key,
     required this.value,
@@ -1419,6 +1424,26 @@ class VerticalVolumeSlider extends StatelessWidget {
 
   final double value;
   final ValueChanged<double> onChanged;
+
+  @override
+  State<VerticalVolumeSlider> createState() => _VerticalVolumeSliderState();
+}
+
+class _VerticalVolumeSliderState extends State<VerticalVolumeSlider> {
+  late double value = widget.value.clamp(0.0, 1.0).toDouble();
+
+  @override
+  void didUpdateWidget(VerticalVolumeSlider oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.value != widget.value) {
+      value = widget.value.clamp(0.0, 1.0).toDouble();
+    }
+  }
+
+  void onChanged(double next) {
+    setState(() => value = next);
+    widget.onChanged(next);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1436,7 +1461,7 @@ class VerticalVolumeSlider extends StatelessWidget {
         quarterTurns: 3,
         child: Slider(
           key: const ValueKey('vertical-volume-slider'),
-          value: value.clamp(0.0, 1.0).toDouble(),
+          value: value,
           onChanged: onChanged,
         ),
       ),
