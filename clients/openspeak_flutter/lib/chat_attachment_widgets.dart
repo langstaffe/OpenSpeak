@@ -1109,28 +1109,15 @@ class TransferProgressBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final clamped = value?.clamp(0.0, 1.0);
+    final clamped = value?.clamp(0.0, 1.0).toDouble();
     return ClipRRect(
       borderRadius: BorderRadius.circular(999),
-      child: Container(
-        height: 4,
-        color: const Color(0xFF34373D),
-        child: clamped == null
-            ? const LinearProgressIndicator(
-                minHeight: 4,
-                backgroundColor: Color(0xFF34373D),
-                color: OsColors.green,
-              )
-            : Align(
-                alignment: Alignment.centerLeft,
-                child: FractionallySizedBox(
-                  widthFactor: clamped,
-                  child: ColoredBox(
-                    color: color,
-                    child: const SizedBox.expand(),
-                  ),
-                ),
-              ),
+      child: LinearProgressIndicator(
+        key: const ValueKey('transfer-progress-bar'),
+        value: clamped,
+        minHeight: 4,
+        backgroundColor: const Color(0xFF34373D),
+        color: color,
       ),
     );
   }

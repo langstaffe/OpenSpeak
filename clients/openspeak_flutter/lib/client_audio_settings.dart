@@ -569,67 +569,45 @@ class MicrophoneThresholdMeter extends StatelessWidget {
         const SizedBox(height: 8),
         ValueListenableBuilder<double>(
           valueListenable: level,
-          builder: (context, inputLevel, _) => LayoutBuilder(
-            builder: (context, constraints) {
-              void update(double x) => onChanged(
-                (x / constraints.maxWidth).clamp(0.0, 1.0).toDouble(),
-              );
-              return GestureDetector(
-                behavior: HitTestBehavior.opaque,
-                onTapDown: (details) => update(details.localPosition.dx),
-                onHorizontalDragUpdate: (details) =>
-                    update(details.localPosition.dx),
-                child: MouseRegion(
-                  cursor: SystemMouseCursors.click,
-                  child: SizedBox(
-                    height: 24,
-                    child: Stack(
-                      alignment: Alignment.centerLeft,
-                      children: [
-                        Container(
-                          height: 10,
-                          decoration: BoxDecoration(
-                            color: OsColors.sidebar,
-                            borderRadius: BorderRadius.circular(99),
-                            border: Border.all(color: OsColors.panelBorder),
-                          ),
-                        ),
-                        FractionallySizedBox(
-                          key: const ValueKey('microphone-current-level'),
-                          widthFactor: inputLevel.clamp(0.0, 1.0),
-                          child: Container(
-                            height: 8,
-                            decoration: BoxDecoration(
-                              color: inputLevel >= threshold
-                                  ? OsColors.green
-                                  : OsColors.blurple,
-                              borderRadius: BorderRadius.circular(99),
-                            ),
-                          ),
-                        ),
-                        Positioned(
-                          left: (constraints.maxWidth * threshold - 2).clamp(
-                            0,
-                            constraints.maxWidth - 4,
-                          ),
-                          child: Container(
-                            width: 4,
-                            height: 20,
-                            decoration: BoxDecoration(
-                              color: OsColors.text,
-                              borderRadius: BorderRadius.circular(3),
-                              boxShadow: const [
-                                BoxShadow(color: Colors.black45, blurRadius: 3),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
+          builder: (context, inputLevel, _) => SizedBox(
+            height: 24,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(99),
+                  child: LinearProgressIndicator(
+                    key: const ValueKey('microphone-current-level'),
+                    value: inputLevel.clamp(0.0, 1.0).toDouble(),
+                    minHeight: 8,
+                    color: inputLevel >= threshold
+                        ? OsColors.green
+                        : OsColors.blurple,
+                    backgroundColor: OsColors.sidebar,
                   ),
                 ),
-              );
-            },
+                SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    activeTrackColor: Colors.transparent,
+                    inactiveTrackColor: Colors.transparent,
+                    trackHeight: 0,
+                    thumbColor: OsColors.text,
+                    thumbShape: const RoundSliderThumbShape(
+                      enabledThumbRadius: 6,
+                    ),
+                    overlayColor: const Color(0x335865F2),
+                    overlayShape: const RoundSliderOverlayShape(
+                      overlayRadius: 12,
+                    ),
+                  ),
+                  child: Slider(
+                    key: const ValueKey('microphone-threshold-slider'),
+                    value: threshold.clamp(0.0, 1.0).toDouble(),
+                    onChanged: onChanged,
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
         const SizedBox(height: 5),
@@ -658,53 +636,6 @@ class AudioDeviceDropdown extends StatelessWidget {
   final String emptyLabel;
   final ValueChanged<String?> onChanged;
 
-  Future<void> _showOptions(
-    BuildContext context,
-    List<({String label, String value})> options,
-  ) async {
-    final fieldBox = context.findRenderObject() as RenderBox;
-    final overlayBox =
-        Overlay.of(context).context.findRenderObject() as RenderBox;
-    final topLeft = fieldBox.localToGlobal(
-      Offset(0, fieldBox.size.height + 6),
-      ancestor: overlayBox,
-    );
-    final position = RelativeRect.fromRect(
-      Rect.fromLTWH(topLeft.dx, topLeft.dy, fieldBox.size.width, 0),
-      Offset.zero & overlayBox.size,
-    );
-    final selected = await showMenu<String>(
-      context: context,
-      position: position,
-      constraints: BoxConstraints.tightFor(width: fieldBox.size.width),
-      color: OsColors.panel,
-      surfaceTintColor: Colors.transparent,
-      elevation: 18,
-      menuPadding: const EdgeInsets.symmetric(vertical: 6),
-      clipBehavior: Clip.antiAlias,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: const BorderSide(color: OsColors.panelBorder),
-      ),
-      items: [
-        for (final option in options)
-          PopupMenuItem<String>(
-            key: ValueKey('audio-device-option-${option.value}'),
-            value: option.value,
-            height: 44,
-            padding: const EdgeInsets.symmetric(horizontal: 6),
-            mouseCursor: SystemMouseCursors.click,
-            child: AudioDeviceMenuOption(
-              label: option.label,
-              selected: option.value == value,
-            ),
-          ),
-      ],
-    );
-    if (!context.mounted || selected == null) return;
-    onChanged(selected);
-  }
-
   @override
   Widget build(BuildContext context) {
     final options = <({String label, String value})>[
@@ -716,141 +647,116 @@ class AudioDeviceDropdown extends StatelessWidget {
         ),
       ),
     ];
-    final selectedLabel = options
-        .where((option) => option.value == value)
-        .map((option) => option.label)
-        .firstOrNull;
-    final transparentMenuInkTheme = Theme.of(context).copyWith(
-      hoverColor: Colors.transparent,
-      highlightColor: Colors.transparent,
-      splashColor: Colors.transparent,
+    final selection = options.any((option) => option.value == value)
+        ? value
+        : '';
+    final outline = OutlineInputBorder(
+      borderRadius: BorderRadius.circular(12),
+      borderSide: const BorderSide(color: OsColors.panelBorder),
     );
-    return Theme(
-      data: transparentMenuInkTheme,
-      child: Builder(
-        builder: (fieldContext) => Material(
-          color: OsColors.field,
-          shape: RoundedRectangleBorder(
+    return DropdownMenu<String>(
+      key: ValueKey('audio-device-dropdown-$label'),
+      initialSelection: selection,
+      expandedInsets: EdgeInsets.zero,
+      selectOnly: true,
+      requestFocusOnTap: true,
+      enableSearch: false,
+      label: Text(label),
+      textStyle: const TextStyle(
+        color: OsColors.text,
+        fontSize: 16,
+        fontWeight: FontWeight.w700,
+      ),
+      trailingIcon: const Icon(
+        Icons.keyboard_arrow_down_rounded,
+        color: OsColors.muted,
+        size: 22,
+      ),
+      selectedTrailingIcon: const Icon(
+        Icons.keyboard_arrow_up_rounded,
+        color: OsColors.muted,
+        size: 22,
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: OsColors.field,
+        constraints: const BoxConstraints.tightFor(height: 64),
+        contentPadding: const EdgeInsets.fromLTRB(15, 10, 8, 8),
+        labelStyle: const TextStyle(
+          color: OsColors.dim,
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+        ),
+        floatingLabelStyle: const TextStyle(
+          color: OsColors.dim,
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+        ),
+        border: outline,
+        enabledBorder: outline,
+        focusedBorder: outline.copyWith(
+          borderSide: const BorderSide(color: OsColors.blurple),
+        ),
+      ),
+      menuStyle: MenuStyle(
+        backgroundColor: const WidgetStatePropertyAll(OsColors.panel),
+        surfaceTintColor: const WidgetStatePropertyAll(Colors.transparent),
+        elevation: const WidgetStatePropertyAll(18),
+        padding: const WidgetStatePropertyAll(
+          EdgeInsets.symmetric(vertical: 6),
+        ),
+        shape: WidgetStatePropertyAll(
+          RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
             side: const BorderSide(color: OsColors.panelBorder),
           ),
-          clipBehavior: Clip.antiAlias,
-          child: InkWell(
-            key: ValueKey('audio-device-dropdown-$label'),
-            onTap: () => _showOptions(fieldContext, options),
-            mouseCursor: SystemMouseCursors.click,
-            hoverColor: OsColors.rowHover,
-            splashColor: OsColors.blurpleSoft,
-            child: SizedBox(
-              height: 64,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 15),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      label,
-                      style: const TextStyle(
-                        color: OsColors.dim,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 3),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            selectedLabel ?? emptyLabel,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: OsColors.text,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        const Icon(
-                          Icons.keyboard_arrow_down_rounded,
-                          color: OsColors.muted,
-                          size: 22,
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
         ),
       ),
-    );
-  }
-}
-
-class AudioDeviceMenuOption extends StatefulWidget {
-  const AudioDeviceMenuOption({
-    super.key,
-    required this.label,
-    required this.selected,
-  });
-
-  final String label;
-  final bool selected;
-
-  @override
-  State<AudioDeviceMenuOption> createState() => _AudioDeviceMenuOptionState();
-}
-
-class _AudioDeviceMenuOptionState extends State<AudioDeviceMenuOption> {
-  bool hovered = false;
-
-  @override
-  Widget build(BuildContext context) {
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setState(() => hovered = true),
-      onExit: (_) => setState(() => hovered = false),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 100),
-        height: 38,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        decoration: BoxDecoration(
-          color: widget.selected
-              ? OsColors.blurpleSoft
-              : hovered
-              ? OsColors.rowHover
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                widget.label,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: widget.selected ? OsColors.text : OsColors.muted,
+      dropdownMenuEntries: [
+        for (final option in options)
+          DropdownMenuEntry<String>(
+            value: option.value,
+            label: option.label,
+            labelWidget: Text(
+              option.label,
+              key: ValueKey('audio-device-option-${option.value}'),
+              overflow: TextOverflow.ellipsis,
+            ),
+            trailingIcon: option.value == selection
+                ? const Icon(
+                    Icons.check_rounded,
+                    size: 18,
+                    color: OsColors.blurple,
+                  )
+                : null,
+            style: ButtonStyle(
+              minimumSize: const WidgetStatePropertyAll(Size.fromHeight(44)),
+              padding: const WidgetStatePropertyAll(
+                EdgeInsets.symmetric(horizontal: 12),
+              ),
+              foregroundColor: WidgetStatePropertyAll(
+                option.value == selection ? OsColors.text : OsColors.muted,
+              ),
+              backgroundColor: WidgetStateProperty.resolveWith((states) {
+                if (option.value == selection) return OsColors.blurpleSoft;
+                if (states.contains(WidgetState.hovered) ||
+                    states.contains(WidgetState.focused)) {
+                  return OsColors.rowHover;
+                }
+                return Colors.transparent;
+              }),
+              textStyle: WidgetStatePropertyAll(
+                TextStyle(
                   fontSize: 14,
-                  fontWeight: widget.selected
+                  fontWeight: option.value == selection
                       ? FontWeight.w700
                       : FontWeight.w600,
                 ),
               ),
             ),
-            if (widget.selected) ...[
-              const SizedBox(width: 10),
-              const Icon(
-                Icons.check_rounded,
-                size: 18,
-                color: OsColors.blurple,
-              ),
-            ],
-          ],
-        ),
-      ),
+          ),
+      ],
+      onSelected: onChanged,
     );
   }
 }

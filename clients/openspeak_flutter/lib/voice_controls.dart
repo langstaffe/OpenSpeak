@@ -1420,81 +1420,27 @@ class VerticalVolumeSlider extends StatelessWidget {
   final double value;
   final ValueChanged<double> onChanged;
 
-  static const double _trackTop = 20;
-  static const double _trackBottom = 92;
-
-  void _updateValue(Offset localPosition) {
-    final raw =
-        1 - ((localPosition.dy - _trackTop) / (_trackBottom - _trackTop));
-    onChanged(raw.clamp(0.0, 1.0).toDouble());
-  }
-
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTapDown: (details) => _updateValue(details.localPosition),
-      onVerticalDragStart: (details) => _updateValue(details.localPosition),
-      onVerticalDragUpdate: (details) => _updateValue(details.localPosition),
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: CustomPaint(
-          painter: _VerticalVolumeSliderPainter(
-            value.clamp(0.0, 1.0).toDouble(),
-          ),
+    return SliderTheme(
+      data: SliderTheme.of(context).copyWith(
+        activeTrackColor: OsColors.green,
+        inactiveTrackColor: const Color(0xFF202225),
+        trackHeight: 6,
+        thumbColor: OsColors.text,
+        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 9),
+        overlayColor: const Color(0x3323A559),
+        overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
+      ),
+      child: RotatedBox(
+        quarterTurns: 3,
+        child: Slider(
+          key: const ValueKey('vertical-volume-slider'),
+          value: value.clamp(0.0, 1.0).toDouble(),
+          onChanged: onChanged,
         ),
       ),
     );
-  }
-}
-
-class _VerticalVolumeSliderPainter extends CustomPainter {
-  const _VerticalVolumeSliderPainter(this.value);
-
-  final double value;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    const trackWidth = 6.0;
-    const thumbRadius = 9.0;
-    final centerX = size.width / 2;
-    final top = VerticalVolumeSlider._trackTop;
-    final bottom = VerticalVolumeSlider._trackBottom;
-    final thumbY = bottom - (bottom - top) * value;
-    final trackPaint = Paint()
-      ..color = const Color(0xFF202225)
-      ..strokeWidth = trackWidth
-      ..strokeCap = StrokeCap.round;
-    final activePaint = Paint()
-      ..color = OsColors.green
-      ..strokeWidth = trackWidth
-      ..strokeCap = StrokeCap.round;
-    canvas.drawLine(Offset(centerX, top), Offset(centerX, bottom), trackPaint);
-    canvas.drawLine(
-      Offset(centerX, thumbY),
-      Offset(centerX, bottom),
-      activePaint,
-    );
-    canvas.drawCircle(
-      Offset(centerX, thumbY),
-      thumbRadius + 2,
-      Paint()..color = const Color(0xFF2F3136),
-    );
-    canvas.drawCircle(
-      Offset(centerX, thumbY),
-      thumbRadius,
-      Paint()..color = OsColors.text,
-    );
-    canvas.drawCircle(
-      Offset(centerX, thumbY),
-      thumbRadius - 3,
-      Paint()..color = OsColors.green,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant _VerticalVolumeSliderPainter oldDelegate) {
-    return oldDelegate.value != value;
   }
 }
 

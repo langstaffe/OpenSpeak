@@ -2401,15 +2401,25 @@ void main() {
       expect(liveLevel, findsOneWidget);
       expect(tester.getSize(liveLevel).width, greaterThan(100));
       expect(
-        tester.widget<FractionallySizedBox>(liveLevel).widthFactor,
+        tester.widget<LinearProgressIndicator>(liveLevel).value,
         closeTo(0.68, 0.001),
       );
       microphoneLevel.value = 0.12;
       await tester.pump();
       expect(
-        tester.widget<FractionallySizedBox>(liveLevel).widthFactor,
+        tester.widget<LinearProgressIndicator>(liveLevel).value,
         closeTo(0.12, 0.001),
       );
+      var thresholdSlider = tester.widget<Slider>(
+        find.byKey(const ValueKey('microphone-threshold-slider')),
+      );
+      expect(thresholdSlider.value, 0.4);
+      thresholdSlider.onChanged!(0.55);
+      await tester.pump();
+      thresholdSlider = tester.widget<Slider>(
+        find.byKey(const ValueKey('microphone-threshold-slider')),
+      );
+      expect(thresholdSlider.value, 0.55);
     }
 
     devices = [
@@ -2430,11 +2440,24 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('USB 麦克风'), findsOneWidget);
-    final option = find.byKey(const ValueKey('audio-device-option-usb-input'));
+    final optionLabel = find.byKey(
+      const ValueKey('audio-device-option-usb-input'),
+    );
+    final option = find.ancestor(
+      of: optionLabel,
+      matching: find.byType(MenuItemButton),
+    );
+    expect(option, findsOneWidget);
     expect(tester.getSize(option).width, tester.getSize(inputDropdown).width);
     expect(
       tester.getTopLeft(option).dy,
       greaterThanOrEqualTo(tester.getBottomLeft(inputDropdown).dy),
+    );
+    await tester.tap(optionLabel);
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<DropdownMenu<String>>(inputDropdown).initialSelection,
+      'usb-input',
     );
     await tester.pumpWidget(const SizedBox.shrink());
     microphoneLevel.dispose();
@@ -4064,6 +4087,7 @@ void main() {
   testWidgets('shows compact mic volume popover on hover', (
     WidgetTester tester,
   ) async {
+    double? changedInputVolume;
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -4079,7 +4103,7 @@ void main() {
               outputVolume: 0.6,
               onMute: () {},
               onListenOff: () {},
-              onInputVolumeChanged: (_) {},
+              onInputVolumeChanged: (value) => changedInputVolume = value,
               onOutputVolumeChanged: (_) {},
               onSettings: () {},
             ),
@@ -4098,6 +4122,23 @@ void main() {
       tester.getSize(find.byType(AudioVolumePopover)),
       const Size(44, 116),
     );
+    final slider = find.byKey(const ValueKey('vertical-volume-slider'));
+    expect(tester.widget<Slider>(slider).value, 0.8);
+    expect(
+      tester
+          .widget<RotatedBox>(
+            find.ancestor(of: slider, matching: find.byType(RotatedBox)),
+          )
+          .quarterTurns,
+      3,
+    );
+    tester.widget<Slider>(slider).onChanged!(0.35);
+    expect(changedInputVolume, 0.35);
+    final sliderRect = tester.getRect(slider);
+    await tester.tapAt(Offset(sliderRect.center.dx, sliderRect.top + 22));
+    expect(changedInputVolume, greaterThan(0.9));
+    await tester.tapAt(Offset(sliderRect.center.dx, sliderRect.bottom - 22));
+    expect(changedInputVolume, lessThan(0.1));
     await gesture.removePointer();
     await tester.pump(const Duration(milliseconds: 300));
   });
@@ -5686,6 +5727,25 @@ void main() {
       ),
       audioProxyFetchChunkBytes,
     );
+  });
+
+  testWidgets('transfer progress bar uses native progress values', (
+    tester,
+  ) async {
+    Future<void> pumpProgress(double? value) => tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: TransferProgressBar(value: value, color: OsColors.green),
+        ),
+      ),
+    );
+
+    await pumpProgress(0.25);
+    final progress = find.byKey(const ValueKey('transfer-progress-bar'));
+    expect(tester.widget<LinearProgressIndicator>(progress).value, 0.25);
+
+    await pumpProgress(null);
+    expect(tester.widget<LinearProgressIndicator>(progress).value, isNull);
   });
 
   testWidgets('audio slider seeks only after dragging ends', (tester) async {
