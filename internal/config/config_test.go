@@ -10,6 +10,7 @@ func TestLoadDirectFileSettings(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "openspeak.db")
 	t.Setenv("OS_DATABASE_PATH", databasePath)
 	t.Setenv("OS_DIRECT_FILE_ROOT", "")
+	t.Setenv("OS_WEB_ASSET_BASE_URL", "https://static.example.test/root/")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
@@ -17,6 +18,9 @@ func TestLoadDirectFileSettings(t *testing.T) {
 	wantRoot := filepath.Join(filepath.Dir(databasePath), "tmp", "direct_files")
 	if cfg.DirectFileRoot != wantRoot {
 		t.Fatalf("direct file root = %q, want %q", cfg.DirectFileRoot, wantRoot)
+	}
+	if cfg.WebAssetBaseURL != "https://static.example.test/root" {
+		t.Fatalf("web asset base URL = %q", cfg.WebAssetBaseURL)
 	}
 	wantCaddyConfig := filepath.Join(filepath.Dir(databasePath), "caddy", "Caddyfile")
 	if cfg.TLS.CaddyConfigPath != wantCaddyConfig {

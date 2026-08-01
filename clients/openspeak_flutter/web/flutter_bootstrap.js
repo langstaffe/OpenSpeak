@@ -54,10 +54,12 @@ async function registerAudioStreamWorker() {
   }
 }
 
+const assetBase = __OPENSPEAK_WEB_ASSET_BASE__;
 const flutterConfig = {
-  entrypointBaseUrl: 'assets-v-__OPENSPEAK_WEB_ASSET_VERSION__/',
-  canvasKitBaseUrl: 'assets-v-__OPENSPEAK_WEB_ASSET_VERSION__/canvaskit',
-  fontFallbackBaseUrl: 'fonts/',
+  assetBase,
+  entrypointBaseUrl: assetBase,
+  canvasKitBaseUrl: `${assetBase}canvaskit`,
+  fontFallbackBaseUrl: `${assetBase}fonts/`,
 };
 
 registerAudioStreamWorker().finally(() => {
