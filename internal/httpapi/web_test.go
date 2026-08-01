@@ -21,10 +21,7 @@ func TestWebSettingsRouteAndSessionInvalidation(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(webRoot, "main.dart.js"), []byte(`window.openspeak=true;`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(webRoot, "flutter_bootstrap.js"), []byte(`const base = __OPENSPEAK_WEB_ASSET_BASE__;`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(webRoot, webAssetVersionFile), []byte("build-test\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(webRoot, "flutter_bootstrap.js"), []byte(`const base = "assets-v-__OPENSPEAK_WEB_ASSET_VERSION__/";`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	canvasKitDir := filepath.Join(webRoot, "canvaskit")
@@ -96,20 +93,12 @@ func TestWebSettingsRouteAndSessionInvalidation(t *testing.T) {
 	assetVersion := currentWebAssetVersion(webRoot)
 	bootstrap := httptest.NewRecorder()
 	env.server.ServeHTTP(bootstrap, httptest.NewRequest(http.MethodGet, "https://example.test/chat/flutter_bootstrap.js", nil))
-	if bootstrap.Code != http.StatusOK || !strings.Contains(bootstrap.Body.String(), "assets-v-"+assetVersion+"/") || strings.Contains(bootstrap.Body.String(), webAssetBasePlaceholder) {
+	if bootstrap.Code != http.StatusOK || !strings.Contains(bootstrap.Body.String(), "assets-v-"+assetVersion+"/") || strings.Contains(bootstrap.Body.String(), webAssetVersionPlaceholder) {
 		t.Fatalf("custom bootstrap = %d %q", bootstrap.Code, bootstrap.Body.String())
 	}
 	if got := bootstrap.Header().Get("Cache-Control"); got != "no-store" {
 		t.Fatalf("custom bootstrap cache = %q", got)
 	}
-	env.server.cfg.WebAssetBaseURL = "https://static.example.test/root"
-	cdnBootstrap := httptest.NewRecorder()
-	env.server.ServeHTTP(cdnBootstrap, httptest.NewRequest(http.MethodGet, "https://example.test/chat/flutter_bootstrap.js", nil))
-	wantCDNBase := `const base = "https://static.example.test/root/assets-v-` + assetVersion + `/";`
-	if cdnBootstrap.Code != http.StatusOK || !strings.Contains(cdnBootstrap.Body.String(), wantCDNBase) {
-		t.Fatalf("CDN bootstrap = %d %q", cdnBootstrap.Code, cdnBootstrap.Body.String())
-	}
-	env.server.cfg.WebAssetBaseURL = ""
 	versionedAsset := httptest.NewRecorder()
 	env.server.ServeHTTP(versionedAsset, httptest.NewRequest(http.MethodGet, "https://example.test/chat/assets-v-"+assetVersion+"/canvaskit/canvaskit.wasm", nil))
 	if versionedAsset.Code != http.StatusOK || versionedAsset.Body.String() != "canvas-kit" {

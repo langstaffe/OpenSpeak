@@ -16,17 +16,11 @@ import (
 var webPathPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 const (
-	webAssetBasePlaceholder = "__OPENSPEAK_WEB_ASSET_BASE__"
-	webAssetVersionFile     = "asset-version.txt"
-	versionedWebAssetPrefix = "assets-v-"
+	webAssetVersionPlaceholder = "__OPENSPEAK_WEB_ASSET_VERSION__"
+	versionedWebAssetPrefix    = "assets-v-"
 )
 
 func currentWebAssetVersion(webRoot string) string {
-	if raw, err := os.ReadFile(filepath.Join(webRoot, webAssetVersionFile)); err == nil {
-		if version := strings.TrimSpace(string(raw)); webPathPattern.MatchString(version) {
-			return version
-		}
-	}
 	info, err := os.Stat(filepath.Join(webRoot, "main.dart.js"))
 	if err != nil || info.IsDir() {
 		return ""
@@ -225,11 +219,7 @@ func (s *Server) serveWeb(w http.ResponseWriter, r *http.Request) bool {
 		if readErr != nil {
 			return false
 		}
-		assetBase := versionedWebAssetPrefix + assetVersion + "/"
-		if s.cfg.WebAssetBaseURL != "" {
-			assetBase = s.cfg.WebAssetBaseURL + "/" + assetBase
-		}
-		body := strings.ReplaceAll(string(raw), webAssetBasePlaceholder, strconv.Quote(assetBase))
+		body := strings.ReplaceAll(string(raw), webAssetVersionPlaceholder, assetVersion)
 		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Length", fmt.Sprint(len(body)))
