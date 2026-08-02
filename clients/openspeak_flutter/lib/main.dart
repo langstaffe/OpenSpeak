@@ -574,6 +574,7 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
       }
       voiceReconnectPending = false;
       voiceDisconnectSoundPlayed = false;
+      updateVoiceMediaRouting();
     }
     updateMutedSpeechReminder();
     final screenShareTrack = voiceSession.activeScreenShare?.track;
@@ -4430,6 +4431,13 @@ class _OpenSpeakHomeState extends State<OpenSpeakHome> {
         await connect();
       }
       if (!voiceSession.isJoinRequestCurrent(voiceJoinRequest)) return;
+      await voiceSession.updateChannelMembers(
+        voiceChannelMemberUserIds(
+          presence,
+          targetChannel.id,
+          includeUserId: auth.user.id,
+        ),
+      );
       final voiceToken = voiceSession.snapshot.voiceToken;
       if (voiceToken?.e2eeRequired == true &&
           voiceToken?.mediaKeySlots == true &&
